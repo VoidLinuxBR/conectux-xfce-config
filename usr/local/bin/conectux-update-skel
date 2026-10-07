@@ -4,7 +4,7 @@
 #
 #  conectux-update-skel - Atualiza e configura os hosts remotos.
 #  Created: seg 21 set 2026 23:40:13 -03
-#  Updated: ter 22 set 2026 16:09:42 -04
+#  Updated: qua 07 out 2026 15:41:20 -04
 #
 #  Copyright (c) 2019-2026, Vilmar Catafesta <vcatafesta@gmail.com>
 #  Copyright (c) 2019-2026, ChiliLinux Development Team <https://chililinux.com> <https://github.com/chililinux>
@@ -45,7 +45,7 @@ shopt -s extglob
 
 #system
 declare APP="${0##*/}"
-declare _VERSION_="0.09.22-20260922"
+declare _VERSION_="0.10.07-20261007"
 declare APPDESC="$APP - Atualiza e configura os hosts remotos "
 declare distro="$(uname -n)"
 declare -A PACKAGEDEP=(
@@ -480,7 +480,7 @@ if ((REMOTE_INI > REMOTE_FIM)); then
 fi
 
 sh_msg() {
-	$QUIET || echo "$@"
+	$QUIET || echo "$@":
 }
 
 sh_run_cmd() {
@@ -552,6 +552,14 @@ reset='\033[0m'
 : "${MID="${clrkey}[${red}✗${green}✓${clrkey}]${reset}"}"
 : "${WARN="${clrkey}[${yellow}⚠${clrkey}]${reset}"}"
 : "${INFO="${cyan}[⛭]${reset}"}"
+
+    replicate() {
+      local char="${1:-#}"
+      local nsize="${2:-$(tput cols)}"
+      # Gera linha com substituição direta sem forks extras
+      printf -v _line "%*s" "$nsize" ""
+      printf '%b\n' "${blue}${_line// /$char}${reset}"
+    }
 
 run_cmd() {
 	local output status cmd cols
@@ -637,8 +645,18 @@ run_cmd vinstall -Scc
 run_cmd vservice add sshd
 run_cmd vservice add epoptes-client
 run_cmd vservice add tailscaled
+#
+{
+    echo "[Seat:*]"
+    echo "autologin-user=$user"
+    echo "autologin-session=xfce"
+} | run_cmd sudo tee /etc/lightdm/lightdm.conf.d/00-autologin.conf
+#
+run_cmd vinstall -fy voidbr-limine-config
+run_cmd sudo voidbr-manager-bootloader --disk /dev/sda --bootloader limine --mode bios --yes
+#
 run_cmd vservice restart lightdm
-
+#
 REMOTE
 }
 
