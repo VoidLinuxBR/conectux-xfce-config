@@ -4,7 +4,7 @@
 #
 #  conectux-update-skel - Atualiza e configura os hosts remotos.
 #  Created: seg 21 set 2026 23:40:13 -03
-#  Updated: qua 07 out 2026 15:41:20 -04
+#  Updated: ter 13 out 2026 22:40:51 -04
 #
 #  Copyright (c) 2019-2026, Vilmar Catafesta <vcatafesta@gmail.com>
 #  Copyright (c) 2019-2026, ChiliLinux Development Team <https://chililinux.com> <https://github.com/chililinux>
@@ -45,7 +45,7 @@ shopt -s extglob
 
 #system
 declare APP="${0##*/}"
-declare _VERSION_="0.10.07-20261007"
+declare _VERSION_="0.10.13-20261013"
 declare APPDESC="$APP - Atualiza e configura os hosts remotos "
 declare distro="$(uname -n)"
 declare -A PACKAGEDEP=(
@@ -386,9 +386,11 @@ Opções:
   -a, --all                Processa todos os hosts (${yellow}${REMOTE_IP}.${REMOTE_INI}-${REMOTE_IP}.${REMOTE_FIM}${rst})
   -i, --remote-ini ${red}<NUM>${rst}   Primeiro host do intervalo
   -f, --remote-fim ${red}<NUM>${rst}   Último host do intervalo
+  -p, --port       ${red}<NUM>${rst}   Porta host remoto
   -q, --quiet              Oculta a saída dos comandos
   -r, --reboot             Reinicia o host remoto após finalizar
   -V, --version            Mostra a versão e sai
+  -u, --user               Usuario remoto
   -h, --help               Mostra esta ajuda
 
 Exemplos:
@@ -408,6 +410,28 @@ fi
 
 while (($#)); do
 	case "$1" in
+	-u | --user)
+		if (($# < 2)); then
+			echo "Opção $1 requer um valor." >&2
+			echo >&2
+			usage >&2
+			exit 1
+		fi
+		REMOTE_USER="$2"
+		shift 2
+		;;
+
+	-p | --port)
+		if (($# < 2)); then
+			echo "Opção $1 requer um valor." >&2
+			echo >&2
+			usage >&2
+			exit 1
+		fi
+		REMOTE_PORT="$2"
+		shift 2
+		;;
+
 	-V | --version)
 		sh_version
 		exit 0
