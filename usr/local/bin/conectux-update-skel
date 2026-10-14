@@ -605,21 +605,6 @@ sh_run_cmd() {
 	fi
 }
 
-sh_remote_run_command() {
-  sh_msg "Executando os comandos em ${usuario}@${ip}:${porta}..."
-
-  SSHPASS="$senha" sshpass -e ssh \
-    -o StrictHostKeyChecking=accept-new \
-    -p "$porta" \
-    "${usuario}@${ip}" \
-    bash -s -- "$usuario" "$ip" "$porta" "${REMOTE_DISK}" "${REMOTE_BOOTLOADER}" "$QUIET" "$REBOOT" <<'REMOTE'
-set -e
-export TERM=${TERM:-xterm-256color}
-
-sudo vservice restart sshd
-REMOTE
-}
-
 sh_connect_remote_upgrade() {
 	sh_msg "Executando os comandos em ${usuario}@${ip}:${porta}..."
 
@@ -811,6 +796,16 @@ sh_connect_remote_reboot() {
 		sudo reboot
 }
 
+sh_connect_remote_restart_sshd() {
+	sh_msg "Reiniciando ${usuario}@${ip}:${porta}..."
+
+	SSHPASS="$senha" sh_run_cmd sshpass -e ssh \
+		-o StrictHostKeyChecking=accept-new \
+		-p "$porta" \
+		"$usuario@$ip" \
+		vservice restart sshd
+}
+
 sh_is_online() {
 	local ip="$1"
 	ping -c1 -W1 "$ip" >/dev/null 2>&1
@@ -855,7 +850,7 @@ sh_proccess() {
 			return
 		fi
 
-		sh_remote_run_command
+		sh_connect_remote_restart_sshd
 
 		if "$REBOOT"; then
 			sh_connect_remote_reboot
