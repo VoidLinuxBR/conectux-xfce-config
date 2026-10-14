@@ -4,7 +4,7 @@
 #
 #  conectux-update-skel - Atualiza e configura os hosts remotos.
 #  Created: seg 21 set 2026 23:40:13 -03
-#  Updated: qua 14 out 2026 15:31:44 -04
+#  Updated: qua 14 out 2026 18:25:00 -04
 #
 #  Copyright (c) 2019-2026, Vilmar Catafesta <vcatafesta@gmail.com>
 #  Copyright (c) 2019-2026, ChiliLinux Development Team <https://chililinux.com> <https://github.com/chililinux>
@@ -45,15 +45,19 @@ shopt -s extglob
 
 #system
 declare APP="${0##*/}"
-declare _VERSION_="0.10.14-20261014"
+declare _VERSION_="0.12.0-20261014"
 declare APPDESC="$APP - Atualiza e configura os hosts remotos "
 declare distro="$(uname -n)"
+# Mapa: [comando]=pacote  (dependências reais deste script)
 declare -A PACKAGEDEP=(
 	[gettext]=gettext
-	[dd]=coreutils
-	[hdparm]=hdparm
-	[fio]=fio
-	[tput]=ncurses
+	[sshpass]=sshpass
+	[ssh]=openssh
+	[ssh-copy-id]=openssh
+	[ssh-keygen]=openssh
+	[ping]=iputils
+	[timeout]=coreutils
+	[pgrep]=procps-ng
 )
 # Mapa: [distro]="lista de pacotes"
 declare -A DISTRO_PKGS=(
@@ -81,95 +85,87 @@ declare -A DISTRO_MGR=(
 )
 
 has_command() {
-	command -v "$1" >/dev/null && return 0 || return 1
+	command -v "$1" >/dev/null
 }
 
+# Cores via sequências ANSI diretas: evita ~60 forks de tput a cada execução
 set_varcolors() {
-	# does the terminal support true-color?
-	if has_command tput; then
-		#tput setaf 127 | cat -v  #capturar saida
-		: "${RED=$(tput bold)$(tput setaf 196)}"
-		: "${GREEN=$(tput bold)$(tput setaf 2)}"
-		: "${YELLOW=$(tput bold)$(tput setaf 3)}"
-		: "${BLUE=$(tput setaf 4)}"
-		: "${PURPLE=$(tput setaf 125)}"
-		: "${CYAN=$(tput setaf 6)}"
-		: "${NC=$(tput sgr0)}"
-		: "${RESET=$(tput sgr0)}"
-		: "${BOLD=$(tput bold)}"
-		: "${black=$(tput bold)$(tput setaf 0)}"
-		: "${reverse=$(tput rev)}"
-		: "${branca=${black}$(tput setab 7)}"
+	if [[ -t 1 && ${TERM:-dumb} != dumb ]]; then
+		local e=$'\e['
 
-		: "${reset=$(tput sgr0)}"
-		: "${rst=$(tput sgr0)}"
-		: "${bold=$(tput bold)}"
-		: "${underline=$(tput smul)}"
-		: "${nounderline=$(tput rmul)}"
-		: "${reverse=$(tput rev)}"
+		reset="${e}0m"
+		rst="$reset"
+		bold="${e}1m"
+		underline="${e}4m"
+		nounderline="${e}24m"
+		reverse="${e}7m"
 
-		: "${black=$(tput bold)$(tput setaf 0)}"
-		: "${red=$(tput bold)$(tput setaf 196)}"
-		: "${green=$(tput bold)$(tput setaf 2)}"
-		: "${yellow=$(tput bold)$(tput setaf 3)}"
-		: "${blue=$(tput setaf 27)}"
-		: "${pink=$(tput setaf 5)}"
-		: "${magenta=$(tput setaf 5)}"
-		: "${cyan=$(tput setaf 6)}"
-		: "${white=$(tput setaf 7)}"
-		: "${gray=$(tput setaf 8)}"
-		: "${light_red=$(tput setaf 9)}"
-		: "${light_green=$(tput setaf 10)}"
-		: "${light_yellow=$(tput setaf 11)}"
-		: "${light_blue=$(tput setaf 12)}"
-		: "${light_magenta=$(tput setaf 13)}"
-		: "${light_cyan=$(tput setaf 14)}"
-		: "${light_white=$(tput setaf 15)}"
-		: "${orange=$(tput setaf 202)}"
-		: "${purple=$(tput setaf 125)}"
-		: "${violet=$(tput setaf 61)}"
+		black="${e}1;30m"
+		red="${e}1;38;5;196m"
+		green="${e}1;32m"
+		yellow="${e}1;33m"
+		blue="${e}38;5;27m"
+		pink="${e}35m"
+		magenta="${e}35m"
+		cyan="${e}36m"
+		white="${e}37m"
+		gray="${e}90m"
+		light_red="${e}91m"
+		light_green="${e}92m"
+		light_yellow="${e}93m"
+		light_blue="${e}94m"
+		light_magenta="${e}95m"
+		light_cyan="${e}96m"
+		light_white="${e}97m"
+		orange="${e}38;5;202m"
+		purple="${e}38;5;125m"
+		violet="${e}38;5;61m"
 
-		# Definir cores de fundo
-		: "${preto=$(tput setab 0)}"
-		: "${vermelho=$(tput setab 196)}"
-		: "${verde=$(tput setab 2)}"
-		: "${amarelo=$(tput setab 3)}"
-		: "${azul=$(tput setab 20)}"
-		: "${roxo=$(tput setab 5)}"
-		: "${ciano=$(tput setab 6)}"
-		: "${branca="${black}$(tput setab 7)"}"
-		: "${cinza=$(tput setab 8)}"
-		: "${laranja=$(tput setab 202)}"
-		: "${roxa=$(tput setab 125)}"
-		: "${violeta=$(tput setab 61)}"
+		# cores de fundo
+		preto="${e}40m"
+		vermelho="${e}48;5;196m"
+		verde="${e}42m"
+		amarelo="${e}43m"
+		azul="${e}48;5;20m"
+		roxo="${e}45m"
+		ciano="${e}46m"
+		branca="${black}${e}47m"
+		cinza="${e}100m"
+		laranja="${e}48;5;202m"
+		roxa="${e}48;5;125m"
+		violeta="${e}48;5;61m"
 
-		: "${COL_NC='\e[0m'}" # No Color
-		: "${COL_LIGHT_GREEN='\e[1;32m'}"
-		: "${COL_LIGHT_RED='\e[1;31m'}"
-		: "${DONE="${COL_LIGHT_GREEN} done!${COL_NC}"}"
-		: "${OVER="\\r\\033[K"}"
-		: "${DOTPREFIX="  ${black}::${reset} "}"
-		: "${clrkey=${light_white}}"
-		: "${TICK="${clrkey}[${green}✓${clrkey}]${rst}"}"
-		: "${CROSS="${clrkey}[${red}✗${clrkey}]${rst}"}"
-		: "${MID="${clrkey}[${red}✗${green}✓${clrkey}]${rst}"}"
-		: "${WARN="${clrkey}[${yellow}⚠${clrkey}]${yellow}"}"
-		#: "${INFO="${clrkey}[${yellow}➜${clrkey}]${rst}"}"
-		: "${INFO="${cyan}[⛭]${rst}"}"
+		DONE="${light_green} done!${reset}"
+		OVER=$'\r\e[K'
+		DOTPREFIX="  ${black}::${reset} "
+		clrkey="${light_white}"
+		TICK="${clrkey}[${green}✓${clrkey}]${rst}"
+		CROSS="${clrkey}[${red}✗${clrkey}]${rst}"
+		MID="${clrkey}[${red}✗${green}✓${clrkey}]${rst}"
+		WARN="${clrkey}[${yellow}⚠${clrkey}]${yellow}"
+		INFO="${cyan}[⛭]${rst}"
 	else
 		unset_varcolors
 	fi
 }
 
 unset_varcolors() {
-	unset RED GREEN YELLOW BLUE PURPLE CYAN NC RESET BOLD
-	unset reset rst bold underline nounderline reverse
-	unset black red green yellow blue magenta cyan white gray orange purple violet
-	unset light_red light_green light_yellow light_blue light_magenta light_cyan light_white
-	unset preto vermelho verde amarelo azul roxo ciano branca cinza laranja roxa violeta
-	TICK="${white}[${verde}✓${rst}${white}]${rst}"
-	CROSS="${white}[${roxa}✗${rst}${white}]${rst}"
-	INFO="${white}[${cinza}i${rst}${white}]${rst}"
+	# Zera (em vez de unset) para não quebrar com 'set -u' quando a saída não é um terminal
+	local v
+	for v in reset rst bold underline nounderline reverse \
+		black red green yellow blue pink magenta cyan white gray orange purple violet \
+		light_red light_green light_yellow light_blue light_magenta light_cyan light_white \
+		preto vermelho verde amarelo azul roxo ciano branca cinza laranja roxa violeta; do
+		printf -v "$v" '%s' ''
+	done
+	DONE=" done!"
+	OVER=$'\r'
+	DOTPREFIX="  :: "
+	TICK="[✓]"
+	CROSS="[✗]"
+	MID="[✗✓]"
+	WARN="[⚠]"
+	INFO="[i]"
 }
 
 sh_checkroot() {
@@ -191,26 +187,25 @@ elevate_to_root() {
 
 replicate() {
 	local char="${1:-#}"
-	local nsize="${2:-$(tput cols)}"
-	# Gera linha com substituição direta sem forks extras
+	local nsize="${2:-${COLUMNS:-$(tput cols 2>/dev/null || echo 80)}}"
+	local _line
 	printf -v _line "%*s" "$nsize" ""
-	printf '%b\n' "${blue}${_line// /$char}${reset}"
+	printf '%b\n' "${blue:-}${_line// /$char}${reset:-}"
 }
 
 readconf() {
 	local msg="$1"
-	local color="${2:-${yellow}}"
+	local color="${2:-${yellow:-}}"
 
 	echo -n -e "$color"
-	if [[ $LC_DEFAULT -eq 0 ]]; then
+	if [[ ${LC_DEFAULT:-0} -eq 0 ]]; then
 		read -r -p "$msg [N/s] :"
 	else
 		read -r -p "$msg [N/y] :"
 	fi
-	echo -n -e "$reset"
+	echo -n -e "${reset:-}"
 	case "${REPLY^}" in
 	[SY]) return 0 ;;
-	"") return 1 ;;
 	*) return 1 ;;
 	esac
 }
@@ -229,12 +224,10 @@ debug() {
 run_cmd() {
 	local cmd="$*"
 
-	if [[ $DRYRUN -eq 1 ]]; then
+	if [[ ${DRYRUN:-0} -eq 1 ]]; then
 		msg "${cyan}[DRY-RUN]${rst} ${cmd}"
 	else
 		echo -e "  [⚙  ] ${cyan}${cmd}${rst}"
-		# Executa o comando, falha se houver erro
-		# Redireciona stderr para /dev/null apenas para mkdir -p e ummount -R
 		if [[ "$cmd" =~ ^mkdir\ -p ]] || [[ "$cmd" =~ ^umount\ -R ]]; then
 			eval "$cmd" &>/dev/null || true
 		else
@@ -265,85 +258,66 @@ sh_version() {
 	EOF-VERSION
 }
 
-msg() { echo -e "${INFO} ${*}${reset}"; }
-log_ok() { echo -e "${TICK} ${*}${reset}"; }
-log_err() { echo -e "${CROSS} ${*}${reset}"; }
-log_mid() { echo -e "${MID} ${*}${reset}"; }
-log_warn() { echo -e "${WARN} ${*}${reset}"; }
-msg_tab() { echo -e "  ${INFO} ${*}${reset}"; }
-log_ok_tab() { echo -e "  ${TICK} ${*}${reset}"; }
-log_err_tab() { echo -e "  ${CROSS} ${*}${reset}"; }
-log_mid_tab() { echo -e "  ${MID} ${*}${reset}"; }
-log_warn_tab() { echo -e "  ${WARN} ${*}${reset}"; }
+msg() { echo -e "${INFO} ${*}${reset:-}"; }
+log_ok() { echo -e "${TICK} ${*}${reset:-}"; }
+log_err() { echo -e "${CROSS} ${*}${reset:-}"; }
+log_mid() { echo -e "${MID} ${*}${reset:-}"; }
+log_warn() { echo -e "${WARN} ${*}${reset:-}"; }
+msg_tab() { echo -e "  ${INFO} ${*}${reset:-}"; }
+log_ok_tab() { echo -e "  ${TICK} ${*}${reset:-}"; }
+log_err_tab() { echo -e "  ${CROSS} ${*}${reset:-}"; }
+log_mid_tab() { echo -e "  ${MID} ${*}${reset:-}"; }
+log_warn_tab() { echo -e "  ${WARN} ${*}${reset:-}"; }
 die() {
-	echo -e "${CROSS} ${red}${*}${reset}"
+	echo -e "${CROSS} ${red:-}${*}${reset:-}"
 	exit 1
 }
 
 detect_distro() {
-	local id=""
-
-	if [[ -r /etc/os-release ]]; then
-		# Lê ID=void|arch|debian|... exatamente como a distro declara
-		id=$(grep -E '^ID=' /etc/os-release | cut -d= -f2 | tr -d '"')
-	elif [[ -r /usr/lib/os-release ]]; then
-		id=$(grep -E '^ID=' /usr/lib/os-release | cut -d= -f2 | tr -d '"')
-	else
-		echo "unknown"
-		return
-	fi
-	echo "$id"
+	local id="" f
+	for f in /etc/os-release /usr/lib/os-release; do
+		if [[ -r $f ]]; then
+			id=$(. "$f" && printf '%s' "${ID:-}")
+			break
+		fi
+	done
+	printf '%s\n' "${id:-unknown}"
 }
 
 sh_checkDependencies() {
-	local aBlock_files=()
-	local d
-	local pkg
-	local errorFound=false
-	declare -a missing
-	local DISTRO
-	local cmsgNot
-	local cmsgPkg
-	DISTRO="$(detect_distro)"
-	cmsgNot="$(gettext "Não foi possível encontrar o comando")"
-	cmsgPkg="$(gettext "instalar pacote")"
+	local d pkg distro_id cmd cmsgNot cmsgPkg
+	local -a missing=()
+
+	cmsgNot="$(gettext "Não foi possível encontrar o comando" 2>/dev/null || echo "Não foi possível encontrar o comando")"
+	cmsgPkg="$(gettext "instalar pacote" 2>/dev/null || echo "instalar pacote")"
 
 	for d in "${!PACKAGEDEP[@]}"; do
-		if ! command -v "$d" &>/dev/null; then
-			pkg="${PACKAGEDEP[$d]}"
-			log_err "${red}Error${rst}: ${cmsgNot} $(printf "${cyan}%-15s${rst}\n" "$d") -> ${cmsgPkg} ${cyan}${pkg}${rst}"
-			missing+=("${pkg}")
-			errorFound=true
-		else
-			#log_msg "Check: ${cyan}$d"
-			:
-		fi
+		has_command "$d" && continue
+		pkg="${PACKAGEDEP[$d]}"
+		log_err "${red}Error${rst}: ${cmsgNot} $(printf "${cyan}%-15s${rst}" "$d") -> ${cmsgPkg} ${cyan}${pkg}${rst}"
+		[[ " ${missing[*]} " == *" $pkg "* ]] || missing+=("$pkg")
 	done
 
-	if $errorFound; then
-		replicate '='
-		echo "${yellow}             $(gettext "IMPOSSÍVEL CONTINUAR")"
-		echo "${black}$(gettext "Este script precisa dos comandos listados acima")"
-		echo "${black}$(gettext "Instale-os e/ou verifique se eles estão em seu") ${red}\$PATH${reset}"
-		replicate '='
+	((${#missing[@]})) || return 0
 
-		local cmd="${DISTRO_MGR[$DISTRO]}"
-		#local pkgs="${DISTRO_PKGS[$DISTRO]}"
-		local pkgs="${missing[@]}"
+	replicate '='
+	echo "${yellow}             IMPOSSÍVEL CONTINUAR"
+	echo "${black}Este script precisa dos comandos listados acima"
+	echo "${black}Instale-os e/ou verifique se eles estão em seu ${red}\$PATH${reset}"
+	replicate '='
 
-		msg_info "Distro detectada: ${cyan}$DISTRO${rst}"
-		if readconf "$(gettext "Instalar dependências base agora?")"; then
-			echo -e "${blue}::${rst} $(gettext "Preparando ambiente para") ${green}${DISTRO}${reset}..."
-			# Execução dinâmica: $cmd (gerenciador) + $pkgs (lista de pacotes)
-			if ! $cmd $pkgs; then
-				echo
-				echo -e "${red}$(gettext "Erro Crítico:")${rst} $(gettext "A instalação dos pacotes básicos falhou.")"
-				exit 1
-			fi
-			echo
-			echo -e "${green}$(gettext "Sucesso:")${reset} $(gettext "Dependências instaladas.")"
-		fi
-	fi
+	distro_id="$(detect_distro)"
+	cmd="${DISTRO_MGR[$distro_id]:-}"
+	msg "Distro detectada: ${cyan}${distro_id}${rst}"
+
+	[[ -n $cmd ]] || die "Gerenciador de pacotes desconhecido para '${distro_id}'. Instale manualmente: ${missing[*]}"
+	((EUID == 0)) || cmd="sudo $cmd"
+
+	readconf "Instalar dependências agora?" || die "Dependências ausentes: ${missing[*]}"
+	echo -e "${blue}::${rst} Preparando ambiente para ${green}${distro_id}${reset}..."
+	# shellcheck disable=SC2086
+	$cmd "${missing[@]}" || die "Erro Crítico: a instalação dos pacotes falhou."
+	log_ok "Dependências instaladas."
 }
 
 # configure ambiente
@@ -354,17 +328,29 @@ set_varcolors
 
 set -eu
 
+# Encerra recursivamente os processos filhos de $1 (sem matar o próprio script nem o pai)
+kill_tree() {
+	local child
+	for child in $(pgrep -P "$1" 2>/dev/null); do
+		kill_tree "$child"
+	done
+	[[ $1 == "$$" ]] || kill -TERM "$1" 2>/dev/null || true
+}
+
 sh_trap_int() {
+	trap '' INT TERM
 	echo
 	log_warn "Execução interrompida pelo usuário."
+	# Encerra os hosts em andamento (jobs em background ignoram o Ctrl-C)
+	kill_tree "$$"
+	if [[ -n ${RUN_DIR:-} ]] && ! $DRY_RUN; then
+		msg "Logs parciais em: ${cyan}${RUN_DIR}${rst}"
+	fi
 	exit 130
 }
 trap sh_trap_int INT
 
-declare REMOTE_INI=50
-declare REMOTE_FIM=60
 declare REMOTE_IP='100.119.111'
-declare PARAM_IP=false
 declare REMOTE_PORT='22'
 declare PARAM_PORT=false
 declare REMOTE_USER='aluno'
@@ -377,44 +363,254 @@ declare REMOTE_BOOTLOADER="limine"
 declare PARAM_BOOTLOADER=false
 #
 declare QUIET=true
-declare PROCESS_ALL=false
 declare REBOOT=false
-#
-declare -a HOSTS_SUCCESS=()
-declare -a HOSTS_OFFLINE=()
-declare -a HOSTS_FAILED=()
+declare DRY_RUN=false
+declare ASSUME_YES=false
+declare RESET_KEYS=false
+declare PRINT_CONFIG=false
+declare TARGET_SET=false
+declare HOSTS_CLI=false
+declare HOSTS="50-60"
+declare EXCLUDE_HOSTS=""
+declare JOBS=1
+declare SKIP_STEPS=""
+declare CONFIG_ARG=""
+declare -a CONFIG_LOADED=()
+declare -a HOST_LIST=()
+declare -a HOST_IPS=()
+declare RUN_DIR=""
+declare ip="" usuario="" porta="" rotulo=""
+# Porta usada por hosts avulsos (IP/nome) quando nem :porta nem -p foram informados
+declare SSH_PORT_DEFAULT=22
 
-usage() {
+# Etapas do script remoto, na ordem em que rodam (podem ser puladas com --skip)
+declare -a STEP_ORDER=(config upgrade home cleanup bootloader)
+
+# Arquivos: tudo dentro de ~/.conectux-update-skel (nada no /etc)
+declare BASE_DIR="${HOME}/.conectux-update-skel"
+declare CONFIG_FILE="${BASE_DIR}/config"
+declare LOGS_DIR="${BASE_DIR}/logs"
+declare KNOWN_HOSTS="${BASE_DIR}/known_hosts"
+declare LOGS_KEEP=30
+declare SAVE_CONFIG=false
+
+# Opções SSH comuns (known_hosts próprio: não mistura com o ~/.ssh/known_hosts do usuário)
+declare -a SSH_OPTS=(
+	-o StrictHostKeyChecking=accept-new
+	-o "UserKnownHostsFile=${KNOWN_HOSTS}"
+	-o ConnectTimeout=10
+	-o ServerAliveInterval=15
+)
+# Multiplexação: uma única autenticação por host, reaproveitada pelas demais conexões
+declare -a SSH_MUX=(
+	-o ControlMaster=auto
+	-o "ControlPath=${XDG_RUNTIME_DIR:-/tmp}/conectux-%C"
+	-o ControlPersist=120
+)
+
+# ===================================================================
+# Arquivo de configuração (chave=valor, só chaves conhecidas; não é executado)
+# ===================================================================
+load_config_file() {
+	local file=$1 line key val nline=0
+	local re_kv='^[[:space:]]*([A-Za-z_]+)[[:space:]]*=[[:space:]]*(.*)$'
+	local re_dq='^"(.*)"$' re_sq="^'(.*)'\$" re_skip='^[[:space:]]*(#|$)'
+
+	while IFS= read -r line || [[ -n $line ]]; do
+		nline=$((nline + 1))
+		[[ $line =~ $re_skip ]] && continue
+		if ! [[ $line =~ $re_kv ]]; then
+			log_warn "${file}:${nline}: linha ignorada: ${line}"
+			continue
+		fi
+		key=${BASH_REMATCH[1]}
+		val=${BASH_REMATCH[2]}
+		val="${val%"${val##*[![:space:]]}"}"
+		if [[ $val =~ $re_dq ]] || [[ $val =~ $re_sq ]]; then
+			val=${BASH_REMATCH[1]}
+		fi
+		case "$key" in
+		REMOTE_IP | REMOTE_PORT | REMOTE_USER | REMOTE_DISK | REMOTE_BOOTLOADER | HOSTS | EXCLUDE_HOSTS | JOBS | SKIP_STEPS)
+			printf -v "$key" '%s' "$val"
+			;;
+		*)
+			log_warn "${file}:${nline}: chave desconhecida: ${key}"
+			;;
+		esac
+	done <"$file"
+	CONFIG_LOADED+=("$file")
+}
+
+load_config() {
+	if [[ -n $CONFIG_ARG ]]; then
+		[[ -r $CONFIG_ARG ]] || die "Arquivo de configuração não encontrado: ${CONFIG_ARG}"
+		load_config_file "$CONFIG_ARG"
+	elif [[ -r $CONFIG_FILE ]]; then
+		load_config_file "$CONFIG_FILE"
+	fi
+}
+
+# Cria ~/.conectux-update-skel (privado: guarda logs e chaves de host)
+ensure_base_dir() {
+	if [[ ! -d $BASE_DIR ]]; then
+		mkdir -p "$BASE_DIR" || die "Não foi possível criar ${BASE_DIR}"
+		chmod 700 "$BASE_DIR"
+	fi
+}
+
+# Grava a configuração atual em ~/.conectux-update-skel/config (com backup do anterior)
+save_config() {
+	local dest="${CONFIG_ARG:-$CONFIG_FILE}"
+	ensure_base_dir
+	if [[ -e $dest ]]; then
+		cp -f -- "$dest" "${dest}.bak" || die "Não foi possível criar o backup ${dest}.bak"
+		msg "Backup da configuração anterior: ${cyan}${dest}.bak${rst}"
+	fi
+	print_config >"$dest" || die "Não foi possível gravar ${dest}"
+	log_ok "Configuração gravada em ${cyan}${dest}${rst}"
+}
+
+print_config() {
 	cat <<EOF
-${cyan}${APPDESC}${rst}
+# ${APP} - arquivo de configuração
+# Arquivo: ${CONFIG_FILE}
+# Formato CHAVE="valor". Os parâmetros da linha de comando têm prioridade.
 
-Uso: $APP [Opções]
+# Rede (3 primeiros octetos): o número do host completa o IP (ex: 100.119.111.50)
+REMOTE_IP="${REMOTE_IP}"
 
-Opções:
-  -a, --all                Processa todos os hosts (${yellow}${REMOTE_IP}.${REMOTE_INI}-${REMOTE_IP}.${REMOTE_FIM}${rst})
-  -i, --remote-ini ${red}<NUM>${rst}   Primeiro host do intervalo
-  -f, --remote-fim ${red}<NUM>${rst}   Último host do intervalo
-  --ip             ${red}<ip>${rst}    Ip do remoto
-  -p, --port       ${red}<NUM>${rst}   Porta host remoto
-  -v, --verbose            Mostra saída dos comandos
-  -r, --reboot             Reinicia o host remoto após finalizar
-  -V, --version            Mostra a versão e sai
-  -u, --user               Usuario remoto
-  -s, --senha              Senha usuario remoto
-  -d, --disk               Disco remoteo (ex: /dev/sda)
-  -b, --bootloader         Bootloader do disco remoto (limine|grub - padrão: limine)
-  -h, --help               Mostra esta ajuda
+# Hosts processados pelo -a: números (1-254), intervalos ou [usuário@]host[:porta]
+# (ex: "50-60" ou "50,55-58,10.0.0.5,anon@pc-lab:2222")
+HOSTS="${HOSTS}"
+EXCLUDE_HOSTS="${EXCLUDE_HOSTS}"
 
-Exemplos:
-  $APP -a
-  $APP -a -q
-  $APP -i 50 -f 55
-  $APP --remote-ini 50 --remote-fim 55
-  $APP -i 50 -f 55 --verbose
-  $APP -i 50 -f 50 --verbose --reboot
-  $APP --ip 127.0.0.1 --port 60024 --user anon --senha voidlinux --disk /dev/vda
+# Prefixos: o número do host é anexado (ex: porta 22 + 50 = 2250, usuário aluno50)
+REMOTE_PORT="${REMOTE_PORT}"
+REMOTE_USER="${REMOTE_USER}"
+
+REMOTE_DISK="${REMOTE_DISK}"
+REMOTE_BOOTLOADER="${REMOTE_BOOTLOADER}"
+
+# Hosts processados ao mesmo tempo
+JOBS="${JOBS}"
+
+# Etapas a pular: config,upgrade,home,cleanup,bootloader
+SKIP_STEPS="${SKIP_STEPS}"
 EOF
 }
+
+# ===================================================================
+# Ajuda
+# ===================================================================
+# _usage_opt "<flags>" "<arg>" "<descrição>" ["<nota>"]
+_usage_opt() {
+	local plain="$1${2:+ $2}" pad
+	printf -v pad '%*s' "$((24 - ${#plain}))" ''
+	printf '  %s%s%s%s%s%s' "$green" "$1" "$reset" "${2:+ ${light_cyan}$2${reset}}" "$pad" "$3"
+	[[ -n ${4:-} ]] && printf ' %s%s%s' "$gray" "$4" "$reset"
+	printf '\n'
+}
+
+# _usage_ex "<argumentos>" "<comentário>"
+_usage_ex() {
+	printf '  %s$%s %s%s%s %s%-38s%s %s# %s%s\n' \
+		"$gray" "$reset" "$green" "$APP" "$reset" "$cyan" "$1" "$reset" "$gray" "$2" "$reset"
+}
+
+# _usage_item "<nome>" "<descrição>"
+_usage_item() {
+	printf '  %s%-12s%s %s\n' "$light_cyan" "$1" "$reset" "$2"
+}
+
+usage() {
+	local h="${bold}${yellow}" r="${reset}"
+
+	printf '%s\n\n' "${bold}${cyan}${APPDESC% }${r} ${gray}v${_VERSION_}${r}"
+	printf '%s\n\n' "${h}Uso:${r} ${green}${APP}${r} ${light_cyan}[opções]${r}"
+
+	printf '%s\n' "${h}Alvos:${r} ${gray}(informe pelo menos um)${r}"
+	_usage_opt "-a, --all" "" "Processa os hosts padrão" "(HOSTS: ${HOSTS:-nenhum} → ${REMOTE_IP}.<n>)"
+	_usage_opt "    --hosts" "<LISTA>" "Números (1-254), intervalos ou [usuário@]host[:porta]" "(substitui o padrão)"
+	_usage_opt "    --exclude" "<LISTA>" "Hosts a pular, mesmo formato do --hosts"
+	printf '  %s%s%s\n' "$gray" "ex: --hosts 50,55-58,10.0.0.5,anon@pc-lab:2222   (--ip continua aceito, igual ao --hosts)" "$r"
+
+	printf '\n%s\n' "${h}Conexão:${r}"
+	_usage_opt "-p, --port" "<NUM>" "Porta para todos os hosts" "(padrão: ${REMOTE_PORT}<n>; avulsos: ${SSH_PORT_DEFAULT})"
+	_usage_opt "-u, --user" "<NOME>" "Usuário para os hosts numéricos" "(padrão: ${REMOTE_USER}<n>; avulsos: ${REMOTE_USER})"
+	_usage_opt "-s, --senha" "<SENHA>" "Senha do usuário remoto"
+	_usage_opt "    --reset-keys" "" "Esquece as chaves SSH dos hosts" "(após reinstalar)"
+	printf '  %s%s%s\n' "$gray" "<n> = número do host (ex: 50). Em avulsos, usuário@ e :porta na lista têm prioridade." "$r"
+
+	printf '\n%s\n' "${h}Instalação:${r}"
+	_usage_opt "-d, --disk" "<DEV>" "Disco remoto" "(padrão: ${REMOTE_DISK})"
+	_usage_opt "-b, --bootloader" "<BL>" "Bootloader: ${yellow}limine${r}|${yellow}grub${r}" "(padrão: ${REMOTE_BOOTLOADER})"
+	_usage_opt "    --skip" "<ETAPAS>" "Pula etapas, ex: home,bootloader"
+	_usage_opt "-r, --reboot" "" "Reinicia o host ao final" "(só se não houver avisos)"
+
+	printf '\n%s\n' "${h}Execução:${r}"
+	_usage_opt "-j, --jobs" "<N>" "Hosts processados ao mesmo tempo" "(padrão: ${JOBS})"
+	_usage_opt "-n, --dry-run" "" "Mostra o plano e testa o acesso, sem executar"
+	_usage_opt "-y, --yes" "" "Não pede confirmação"
+	_usage_opt "-c, --config" "<ARQ>" "Usa este arquivo de configuração"
+	_usage_opt "    --print-config" "" "Mostra a configuração atual no formato do arquivo"
+	_usage_opt "    --save-config" "" "Grava a configuração atual em ~/.conectux-update-skel/config"
+
+	printf '\n%s\n' "${h}Saída:${r}"
+	_usage_opt "-v, --verbose" "" "Mostra a saída dos comandos"
+	_usage_opt "-q, --quiet" "" "Oculta a saída dos comandos" "(padrão)"
+	_usage_opt "-V, --version" "" "Mostra a versão e sai"
+	_usage_opt "-h, --help" "" "Mostra esta ajuda"
+
+	printf '\n%s\n' "${h}Etapas:${r} ${gray}(nesta ordem; use os nomes no --skip)${r}"
+	_usage_item "config" "repositório, porta do sshd, greeters do lightdm e serviços"
+	_usage_item "upgrade" "vinstall -Syuf + conectux-xfce-config e tailscale"
+	_usage_item "home" "${red}APAGA${r} o home do usuário e recopia o /etc/skel"
+	_usage_item "cleanup" "kernels antigos, low-ram-optimizer, logs e cache do xbps"
+	_usage_item "bootloader" "reinstala o bootloader no disco"
+	printf '  %s%s%s\n' "$gray" "Sempre: serviços, autologin, restart do lightdm e do sshd, ssh-copy-id." "$r"
+
+	printf '\n%s\n' "${h}Arquivos:${r} ${gray}(tudo em ${BASE_DIR/#$HOME/\~}/)${r}"
+	_usage_item "config" "${CONFIG_FILE/#$HOME/\~}"
+	_usage_item "logs" "${LOGS_DIR/#$HOME/\~}/ ${gray}(últimas ${LOGS_KEEP} execuções)${r}"
+	_usage_item "known_hosts" "${KNOWN_HOSTS/#$HOME/\~}"
+
+	printf '\n%s\n' "${h}Código de saída:${r}"
+	printf '  %s\n' "${green}0${r} tudo certo   ${yellow}2${r} concluído com avisos   ${red}1${r} falha ou sshd inacessível"
+
+	printf '\n%s\n' "${h}Exemplos:${r}"
+	_usage_ex "-a" "todos os hosts, pede confirmação"
+	_usage_ex "-a -n" "só mostra o plano e quem está acessível"
+	_usage_ex "-a -j 4 -y" "4 hosts por vez, sem perguntar"
+	_usage_ex "--hosts 50-55" "hosts .50 a .55"
+	_usage_ex "--hosts 50,52,55-58 --exclude 56" "lista de números, pulando o .56"
+	_usage_ex "--hosts 50 --skip home,bootloader" "só config, upgrade e limpeza no .50"
+	_usage_ex "--hosts 50 --verbose --reboot" "só o .50, detalhado, reinicia no final"
+	_usage_ex "-a --reset-keys" "após reinstalar as máquinas"
+	_usage_ex "--hosts 60-75 -j 4 --save-config" "salva esses valores como padrão"
+	_usage_ex "--hosts anon@127.0.0.1:60024 --senha voidlinux --disk /dev/vda" "VM local"
+}
+
+# Garante que a opção $1 recebeu um valor
+need_arg() {
+	if (($# < 2)); then
+		echo "Opção $1 requer um valor." >&2
+		echo >&2
+		usage >&2
+		exit 1
+	fi
+}
+
+# ===================================================================
+# Argumentos
+# ===================================================================
+# O --config precisa ser lido antes dos demais, para a linha de comando ter prioridade
+for ((k = 1; k <= $#; k++)); do
+	if [[ ${!k} == -c || ${!k} == --config ]]; then
+		k2=$((k + 1))
+		CONFIG_ARG="${!k2:-}"
+	fi
+done
+load_config
 
 if (($# == 0)); then
 	usage
@@ -423,125 +619,38 @@ fi
 
 while (($#)); do
 	case "$1" in
-	-b|--bootloader)
-		if (($# < 2)); then
-			echo "Opção $1 requer um valor." >&2
-			echo >&2
-			usage >&2
-			exit 1
-		fi
-		REMOTE_BOOTLOADER="$2"
-		PARAM_BOOTLOADER=true
+	-b | --bootloader) need_arg "$@"; REMOTE_BOOTLOADER="$2"; PARAM_BOOTLOADER=true; shift 2 ;;
+	-d | --disk)       need_arg "$@"; REMOTE_DISK="$2";       PARAM_DISK=true;       shift 2 ;;
+	-u | --user)       need_arg "$@"; REMOTE_USER="$2";       PARAM_USER=true;       shift 2 ;;
+	-s | --senha)      need_arg "$@"; senha="$2";             PARAM_SENHA=true;      shift 2 ;;
+	-p | --port)       need_arg "$@"; REMOTE_PORT="$2";       PARAM_PORT=true;       shift 2 ;;
+	-i | --remote-ini | -f | --remote-fim)
+		die "As opções -i/-f foram unificadas no --hosts. Ex: -i 50 -f 55 agora é --hosts 50-55"
+		;;
+	--hosts | --ip)
+		# --ip é mantido por compatibilidade: é o mesmo que --hosts <IP>
+		need_arg "$@"
+		# A 1ª ocorrência na linha de comando substitui o HOSTS do config; as seguintes somam
+		if $HOSTS_CLI; then HOSTS+=",$2"; else HOSTS="$2"; fi
+		HOSTS_CLI=true
+		TARGET_SET=true
 		shift 2
 		;;
-	--ip)
-		if (($# < 2)); then
-			echo "Opção $1 requer um valor." >&2
-			echo >&2
-			usage >&2
-			exit 1
-		fi
-		REMOTE_IP="$2"
-		PARAM_IP=true
-		shift 2
-		;;
-	-d | --disk)
-		if (($# < 2)); then
-			echo "Opção $1 requer um valor." >&2
-			echo >&2
-			usage >&2
-			exit 1
-		fi
-		REMOTE_DISK="$2"
-		PARAM_DISK=true
-		shift 2
-		;;
-	-u | --user)
-		if (($# < 2)); then
-			echo "Opção $1 requer um valor." >&2
-			echo >&2
-			usage >&2
-			exit 1
-		fi
-		REMOTE_USER="$2"
-		PARAM_USER=true
-		shift 2
-		;;
-	-s | --senha)
-		if (($# < 2)); then
-			echo "Opção $1 requer um valor." >&2
-			echo >&2
-			usage >&2
-			exit 1
-		fi
-		senha="$2"
-		PARAM_SENHA=true
-		shift 2
-		;;
-
-	-p | --port)
-		if (($# < 2)); then
-			echo "Opção $1 requer um valor." >&2
-			echo >&2
-			usage >&2
-			exit 1
-		fi
-		REMOTE_PORT="$2"
-		PARAM_PORT=true
-		shift 2
-		;;
-
-	-V | --version)
-		sh_version
-		exit 0
-		;;
-
-	-r | --reboot)
-		REBOOT=true
-		shift
-		;;
-
-	-a | --all)
-		PROCESS_ALL=true
-		shift
-		;;
-
-	-i | --remote-ini)
-		if (($# < 2)); then
-			echo "Opção $1 requer um valor." >&2
-			echo >&2
-			usage >&2
-			exit 1
-		fi
-		REMOTE_INI="$2"
-		shift 2
-		;;
-
-	-f | --remote-fim)
-		if (($# < 2)); then
-			echo "Opção $1 requer um valor." >&2
-			echo >&2
-			usage >&2
-			exit 1
-		fi
-		REMOTE_FIM="$2"
-		shift 2
-		;;
-
-	-v | --verbose)
-		QUIET=false
-		shift
-		;;
-	-q | --quiet)
-		QUIET=true
-		shift
-		;;
-
-	-h | --help)
-		usage
-		exit 0
-		;;
-
+	--exclude)         need_arg "$@"; EXCLUDE_HOSTS="$2"; shift 2 ;;
+	-j | --jobs)       need_arg "$@"; JOBS="$2";          shift 2 ;;
+	--skip)            need_arg "$@"; SKIP_STEPS="$2";    shift 2 ;;
+	-c | --config)     need_arg "$@"; shift 2 ;; # já carregado acima
+	-a | --all)        TARGET_SET=true;   shift ;;
+	-n | --dry-run)    DRY_RUN=true;      shift ;;
+	-y | --yes)        ASSUME_YES=true;   shift ;;
+	--reset-keys)      RESET_KEYS=true;   shift ;;
+	--print-config)    PRINT_CONFIG=true; shift ;;
+	--save-config)     SAVE_CONFIG=true;  shift ;;
+	-r | --reboot)     REBOOT=true;       shift ;;
+	-v | --verbose)    QUIET=false;       shift ;;
+	-q | --quiet)      QUIET=true;        shift ;;
+	-V | --version)    sh_version; exit 0 ;;
+	-h | --help)       usage; exit 0 ;;
 	*)
 		echo "Opção inválida: $1" >&2
 		echo >&2
@@ -551,68 +660,298 @@ while (($#)); do
 	esac
 done
 
-if ! $PARAM_IP; then
-	if "$PROCESS_ALL"; then
-		REMOTE_INI=50
-		REMOTE_FIM=60
-	fi
+step_skipped() {
+	[[ ",$SKIP_STEPS," == *",$1,"* ]]
+}
 
-	if ! [[ $REMOTE_INI =~ ^[0-9]+$ && $REMOTE_FIM =~ ^[0-9]+$ ]]; then
-		echo "REMOTE_INI e REMOTE_FIM devem ser números inteiros." >&2
-		exit 1
-	fi
+normalize_skip() {
+	local s ok
+	local -a parts=() valid=()
+	SKIP_STEPS=${SKIP_STEPS//[[:space:]]/}
+	IFS=',' read -ra parts <<<"$SKIP_STEPS"
+	for s in "${parts[@]}"; do
+		[[ -n $s ]] || continue
+		ok=false
+		[[ " ${STEP_ORDER[*]} " == *" $s "* ]] && ok=true
+		$ok || die "Etapa desconhecida em --skip: '${s}' (válidas: ${STEP_ORDER[*]})"
+		valid+=("$s")
+	done
+	SKIP_STEPS=$(IFS=,; printf '%s' "${valid[*]}")
+}
+normalize_skip
 
-	if ((REMOTE_INI > REMOTE_FIM)); then
-		echo "REMOTE_INI não pode ser maior que REMOTE_FIM." >&2
-		exit 1
-	fi
-
+if $PRINT_CONFIG; then
+	print_config
+	exit 0
 fi
 
+if $SAVE_CONFIG; then
+	save_config
+	exit 0
+fi
+
+# ===================================================================
+# Validações
+# ===================================================================
+case "$REMOTE_BOOTLOADER" in
+limine | grub) ;;
+*) die "Bootloader inválido: '${REMOTE_BOOTLOADER}' (use limine|grub)" ;;
+esac
+
+[[ $JOBS =~ ^[1-9][0-9]*$ ]] || die "Valor inválido para --jobs: '${JOBS}' (use um número >= 1)"
+
+# valid_port <porta>: número entre 1 e 65535
+valid_port() {
+	[[ $1 =~ ^[0-9]+$ ]] && ((10#$1 >= 1 && 10#$1 <= 65535))
+}
+
+if $PARAM_PORT && ! valid_port "$REMOTE_PORT"; then
+	die "Porta inválida em -p: '${REMOTE_PORT}' (use 1-65535)"
+fi
+
+
+if ! $TARGET_SET; then
+	log_err "Informe quais hosts processar: ${yellow}-a${rst} (padrão: ${HOSTS:-nenhum}) ou ${yellow}--hosts${rst}."
+	echo "Veja ${green}${APP} --help${rst}" >&2
+	exit 1
+fi
+
+# parse_hosts "<lista>" <array>
+# Cada item pode ser:
+#   50 | 55-58                 número (ou intervalo) do host, de 1 a 254 -> ${REMOTE_IP}.<n>,
+#                              usuário ${REMOTE_USER}<n> e porta ${REMOTE_PORT}<n>
+#   100.119.111.50             IP da própria rede: vira o número 50 (mesmo que "50")
+#   [usuário@]host[:porta]     IP de fora da rede ou nome: host avulso. Sem usuário usa
+#                              ${REMOTE_USER}; sem porta usa a do -p ou a 22 (padrão do SSH)
+parse_hosts() {
+	local spec=$1 part a b i o rest user port host
+	local -n _out=$2
+	local -a parts=() oct=()
+	local re_range='^([0-9]+)-([0-9]+)$'
+	local re_num='^[0-9]+$'
+	local re_ip='^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$'
+	local re_name='^[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?$'
+	local re_user='^[A-Za-z_][A-Za-z0-9._-]*$'
+
+	IFS=',' read -ra parts <<<"${spec//[[:space:]]/}"
+	for part in "${parts[@]}"; do
+		[[ -n $part ]] || continue
+		user="" port="" host=$part
+
+		if [[ $host == *@* ]]; then
+			user=${host%%@*}
+			host=${host#*@}
+			[[ $user =~ $re_user ]] || die "Usuário inválido em '${part}'"
+		fi
+		if [[ $host == *:* ]]; then
+			port=${host##*:}
+			host=${host%:*}
+			valid_port "$port" || die "Porta inválida em '${part}' (use 1-65535)"
+		fi
+
+		# Número ou intervalo de hosts da rede
+		if [[ $host =~ $re_range || $host =~ $re_num ]]; then
+			if [[ -n $user || -n $port ]]; then
+				die "Em '${part}': usuário/porta só valem com IP completo ou nome (ex: anon@${REMOTE_IP}.${host%%-*}:2222)"
+			fi
+			if [[ $host =~ $re_range ]]; then
+				a=$((10#${BASH_REMATCH[1]}))
+				b=$((10#${BASH_REMATCH[2]}))
+				((a <= b)) || die "Intervalo invertido em '${part}'"
+			else
+				a=$((10#$host))
+				b=$a
+			fi
+			((a >= 1 && b <= 254)) || die "Host fora da faixa 1-254 em '${part}' (.0 é a rede e .255 o broadcast)"
+			for ((i = a; i <= b; i++)); do
+				_out+=("$i")
+			done
+
+		# IP completo
+		elif [[ $host =~ $re_ip ]]; then
+			IFS=. read -ra oct <<<"$host"
+			for o in "${oct[@]}"; do
+				((10#$o <= 255)) || die "IP inválido: '${part}'"
+			done
+			rest=${host#"${REMOTE_IP}".}
+			if [[ -z $user && -z $port && $rest != "$host" && $rest =~ $re_num ]]; then
+				# IP da própria rede sem usuário/porta: é o número do host
+				((10#$rest >= 1 && 10#$rest <= 254)) || die "Host fora da faixa 1-254 em '${part}' (.0 é a rede e .255 o broadcast)"
+				_out+=("$((10#$rest))")
+			else
+				_out+=("${user:+${user}@}${host}${port:+:${port}}")
+			fi
+
+		# Nome de host
+		elif [[ $host =~ $re_name ]]; then
+			_out+=("${user:+${user}@}${host}${port:+:${port}}")
+
+		else
+			die "Host inválido: '${part}' (ex: 50,55-58,10.0.0.5,anon@pc-lab:2222)"
+		fi
+	done
+}
+
+# is_hostnum <item>: verdadeiro se o item é um número de host (e não um avulso)
+is_hostnum() {
+	[[ $1 =~ ^[0-9]+$ ]]
+}
+
+# Define ip/usuario/porta/rotulo do item "$1" da lista de hosts.
+#   Número:  ip=${REMOTE_IP}.<n>, usuário/porta com o <n> (aluno50, 2250), salvo -u/-p.
+#   Avulso:  [usuário@]host[:porta]; sem usuário usa ${REMOTE_USER}; sem porta usa -p ou 22.
+host_vars() {
+	local item=$1 n u="" p="" h
+	if is_hostnum "$item"; then
+		n=$item
+		ip="${REMOTE_IP}.${n}"
+		if $PARAM_USER; then usuario=$REMOTE_USER; else usuario="${REMOTE_USER}${n}"; fi
+		if $PARAM_PORT; then porta=$REMOTE_PORT; else porta="${REMOTE_PORT}${n}"; fi
+		rotulo=$ip
+	else
+		h=$item
+		if [[ $h == *@* ]]; then
+			u=${h%%@*}
+			h=${h#*@}
+		fi
+		if [[ $h == *:* ]]; then
+			p=${h##*:}
+			h=${h%:*}
+		fi
+		ip=$h
+		usuario=${u:-$REMOTE_USER}
+		if [[ -n $p ]]; then
+			porta=$p
+		elif $PARAM_PORT; then
+			porta=$REMOTE_PORT
+		else
+			porta=$SSH_PORT_DEFAULT
+		fi
+		rotulo="${ip}:${porta}"
+	fi
+}
+
+# host_key <item>: endereço do host, sem usuário/porta (usado pelo --exclude)
+host_key() {
+	local h=$1
+	if is_hostnum "$h"; then
+		printf '%s' "${REMOTE_IP}.${h}"
+		return 0
+	fi
+	h=${h#*@}
+	printf '%s' "${h%:*}"
+}
+
+build_host_list() {
+	local h key
+	local -a list=() excl=()
+	local -A seen=() skip=()
+
+	HOST_LIST=()
+	[[ -n $HOSTS ]] || die "Nenhum host definido: use --hosts ou defina HOSTS no ${CONFIG_FILE/#$HOME/\~}"
+	parse_hosts "$HOSTS" list
+	if [[ -n $EXCLUDE_HOSTS ]]; then
+		parse_hosts "$EXCLUDE_HOSTS" excl
+	fi
+	for h in "${excl[@]}"; do
+		skip[$(host_key "$h")]=1
+	done
+	for h in "${list[@]}"; do
+		key=$(host_key "$h")
+		[[ -n ${skip[$key]:-} ]] && continue
+		# Duplicados são comparados já resolvidos (10.0.0.5 = aluno@10.0.0.5:22)
+		host_vars "$h"
+		[[ -n ${seen[${usuario}@${ip}:${porta}]:-} ]] && continue
+		seen[${usuario}@${ip}:${porta}]=1
+		# Porta final do host (prefixo + número pode passar de 65535)
+		valid_port "$porta" ||
+			die "Porta inválida para ${rotulo}: '${porta}' (confira REMOTE_PORT=${REMOTE_PORT} ou use -p)"
+		HOST_LIST+=("$h")
+	done
+	((${#HOST_LIST[@]})) || die "Nenhum host para processar (confira --hosts/--exclude)."
+}
+build_host_list
+
+sh_checkDependencies
+
+# ===================================================================
+# Execução por host
+# ===================================================================
 sh_msg() {
-	$QUIET || echo "$@":
+	$QUIET || echo "$@"
 }
 
 sh_run_cmd() {
+	local output status
+
 	printf '%s Running:' "$INFO" >&2
 	printf ' %q' "$@" >&2
 	printf ' ' >&2
 
-	if "$QUIET"; then
-		local output status
+	if $QUIET; then
 		output=$(mktemp)
-
-		if "$@" >"$output" 2>&1; then
-			rm -f "$output"
-			printf '%s\n' "$TICK" >&2
-			return 0
-		else
-			status=$?
-			printf '%s\n' "$CROSS" >&2
-			cat "$output" >&2
-			rm -f "$output"
-			return "$status"
-		fi
+		"$@" >"$output" 2>&1 && status=0 || status=$?
 	else
-		if "$@"; then
-			printf '%s\n' "$TICK" >&2
-			return 0
-		else
-			status=$?
-			printf '%s\n' "$CROSS" >&2
-			return "$status"
-		fi
+		"$@" && status=0 || status=$?
+	fi
+
+	if ((status == 0)); then
+		printf '%s\n' "$TICK" >&2
+	else
+		printf '%s\n' "$CROSS" >&2
+		[[ -n ${output:-} ]] && cat "$output" >&2
+	fi
+	[[ -n ${output:-} ]] && rm -f "$output"
+	return "$status"
+}
+
+
+# ok = sshd responde | nossh = ping ok, porta fechada | offline = nada responde
+host_reach() {
+	if timeout 3 bash -c 'exec 3<>"/dev/tcp/$1/$2"' _ "$ip" "$porta" 2>/dev/null; then
+		echo ok
+	elif ping -c1 -W1 "$ip" >/dev/null 2>&1; then
+		echo nossh
+	else
+		echo offline
 	fi
 }
 
+# ssh para o host atual (ip/usuario/porta definidos por host_vars)
+ssh_remote() {
+	SSHPASS="$senha" sshpass -e ssh "${SSH_OPTS[@]}" "${SSH_MUX[@]}" -p "$porta" "${usuario}@${ip}" "$@"
+}
+
+# Encerra a conexão mestre multiplexada do host atual
+ssh_close() {
+	ssh "${SSH_MUX[@]}" -p "$porta" -O exit "${usuario}@${ip}" >/dev/null 2>&1 || true
+}
+
+# Primeira conexão: autentica, abre a conexão mestre e detecta chave de host trocada.
+# A saída vai para arquivo (não $(...)): a conexão mestre herda o descritor e
+# seguraria uma substituição de comando aberta até o ControlPersist expirar.
+sh_connect_check() {
+	local out rc=0
+	out=$(mktemp)
+	ssh_remote true >"$out" 2>&1 || rc=$?
+	if ((rc)); then
+		if grep -q 'IDENTIFICATION HAS CHANGED' "$out"; then
+			log_err "A chave SSH de ${ip} mudou (máquina reinstalada?). Rode de novo com ${yellow}--reset-keys${rst}."
+		else
+			cat "$out" >&2
+		fi
+	fi
+	rm -f "$out"
+	return "$rc"
+}
+
+# Saída: 0 = ok | 99 = concluído com avisos | outro = falha
 sh_connect_remote_upgrade() {
 	sh_msg "Executando os comandos em ${usuario}@${ip}:${porta}..."
 
-	SSHPASS="$senha" sshpass -e ssh \
-		-o StrictHostKeyChecking=accept-new \
-		-p "$porta" \
-		"${usuario}@${ip}" \
-		bash -s -- "$usuario" "$ip" "$porta" "${REMOTE_DISK}" "${REMOTE_BOOTLOADER}" "$QUIET" "$REBOOT" <<'REMOTE'
+	ssh_remote bash -s -- \
+		"$usuario" "$ip" "$porta" "$REMOTE_DISK" "$REMOTE_BOOTLOADER" "$QUIET" "$REBOOT" \
+		"${COLUMNS:-$(tput cols 2>/dev/null || echo 80)}" "$SKIP_STEPS" <<'REMOTE'
 set -e
 export TERM=${TERM:-xterm-256color}
 
@@ -623,6 +962,10 @@ disk=$4
 bootloader=$5
 quiet=$6
 reboot=$7
+cols=${8:-80}
+skip=${9:-}
+warn=false
+sshd_restarted=false
 
 black='\033[1;30m'
 red='\033[1;38;5;196m'
@@ -632,262 +975,517 @@ blue='\033[38;5;27m'
 cyan='\033[1;36m'
 reset='\033[0m'
 
-: "${COL_NC="$reset"}"
-: "${COL_LIGHT_GREEN="$green"}"
-: "${COL_LIGHT_RED="$red"}"
-: "${DONE="${COL_LIGHT_GREEN} done!${COL_NC}"}"
-: "${OVER='\r\033[K'}"
-: "${DOTPREFIX="  ${black}::${reset} "}"
-: "${clrkey="$reset"}"
-: "${TICK="${clrkey}[${green}✓${clrkey}]${reset}"}"
-: "${CROSS="${clrkey}[${red}✗${clrkey}]${reset}"}"
-: "${MID="${clrkey}[${red}✗${green}✓${clrkey}]${reset}"}"
-: "${WARN="${clrkey}[${yellow}⚠${clrkey}]${reset}"}"
-: "${INFO="${cyan}[⛭]${reset}"}"
-
-    replicate() {
-      local char="${1:-#}"
-      local nsize="${2:-$(tput cols)}"
-      # Gera linha com substituição direta sem forks extras
-      printf -v _line "%*s" "$nsize" ""
-      printf '%b\n' "${blue}${_line// /$char}${reset}"
-    }
+TICK="${reset}[${green}✓${reset}]${reset}"
+CROSS="${reset}[${red}✗${reset}]${reset}"
+WARN="${reset}[${yellow}⚠${reset}]${reset}"
+INFO="${cyan}[⛭]${reset}"
 
 run_cmd() {
-	local output status cmd cols
-
-	cols="${COLUMNS:-$(tput cols 2>/dev/null || printf '80')}"
+	local output status cmd mark
 
 	printf -v cmd '%q ' "$@"
-	cmd="${cmd% }"
+	printf '%b Running on remote %b%s%b: %s' "$INFO" "$yellow" "$nip" "$reset" "${cmd% }" >&2
 
-	printf '%b Running on remote %b%s%b: %s' \
-		"$INFO" \
-		"$yellow" \
-		"$nip" \
-		"$reset" \
-		"$cmd" >&2
-
-	if [[ "$quiet" == true ]]; then
+	if [[ $quiet == true ]]; then
 		output=$(mktemp)
-
-		if "$@" >"$output" 2>&1; then
-			status=0
-		else
-			status=$?
-		fi
-
-		# Coluna final do terminal
-		printf '\033[1;%dG%b\n' \
-			"$((cols - 3))" \
-			"$([[ $status -eq 0 ]] && printf '%b' "$TICK" || printf '%b' "$CROSS")" >&2
-
-		if ((status != 0)); then
-			cat "$output" >&2
-		fi
-
-		rm -f "$output"
-		return "$status"
-	fi
-
-	if "$@"; then
-		status=0
+		"$@" >"$output" 2>&1 && status=0 || status=$?
 	else
-		status=$?
+		"$@" && status=0 || status=$?
 	fi
 
-	# Coluna final do terminal
-	printf '\033[1;%dG%b\n' \
-		"$((cols - 3))" \
-		"$([[ $status -eq 0 ]] && printf '%b' "$TICK" || printf '%b' "$CROSS")" >&2
+	mark=$TICK
+	if ((status)); then mark=$CROSS; fi
+	# Alinha o status na coluna final do terminal local
+	printf '\033[%dG%b\n' "$((cols - 3))" "$mark" >&2
 
+	if [[ -n ${output:-} ]]; then
+		((status == 0)) || cat "$output" >&2
+		rm -f "$output"
+	fi
 	return "$status"
 }
 
-{
-	echo 'repository=https://repo-fastly.voidlinux.org/current'
-	echo '#repository=https://repo-fastly.voidlinux.org/current/nonfree'
-	echo '#repository=https://repo-fastly.voidlinux.org/current/multilib'
-	echo '#repository=https://repo-fastly.voidlinux.org/current/multilib/nonfree'
-} | run_cmd sudo tee /etc/xbps.d/00-repository-main.conf
+# write_conf <arquivo> <linha>...
+write_conf() {
+	local file=$1
+	shift
+	printf '%s\n' "$@" | run_cmd sudo tee "$file"
+}
 
-run_cmd sudo mkdir -p /etc/ssh/sshd_config.d/
-echo "Port $port" | run_cmd sudo tee /etc/ssh/sshd_config.d/${port}-custom.conf
-{
-  echo '#[Seat:*]'
-  echo '#greeter-session=lightdm-elephant-greeter'
-} | run_cmd sudo tee /etc/lightdm/lightdm.conf.d/01-greeter-wayland.conf
-#
-{
-  echo '[Seat:*]'
-  echo 'greeter-session=lightdm-gtk-greeter'
-} | run_cmd sudo tee /etc/lightdm/lightdm.conf.d/01-greeter-xorg.conf
-#
-{
-  echo "[Seat:*]"
-  echo "autologin-user="
-  echo "autologin-session="
-} | run_cmd sudo tee /etc/lightdm/lightdm.conf.d/00-autologin.conf
-#
-run_cmd vservice rm dhcpd sddm gdm lxdm greetd
-run_cmd vservice add lightdm NetworkManager
-run_cmd vservice restart lightdm
-run_cmd vinstall -Syuf
-run_cmd vinstall -fy conectux-xfce-config
-run_cmd vinstall -fy tailscale
+# want <etapa>: verdadeiro se a etapa não foi pulada com --skip
+want() {
+	[[ ",$skip," != *",$1,"* ]]
+}
 
-cd -- "/home/$user" || exit 1
-[[ "$PWD" == "/home/$user" ]] || exit 1
+# Registra um aviso: o host termina como "concluído com aviso" e não é reiniciado
+warning() {
+	printf '%b %b%s%b\n' "$WARN" "$yellow" "$*" "$reset" >&2
+	warn=true
+}
 
-# Remove todo o conteúdo, inclusive arquivos ocultos, exceto '.' e '..'.
-if [[ "$quiet" == true ]]; then
-  rm -Rf /home/$user/.* >/dev/null 2>&1 || true
-  rm -Rf /home/$user/* >/dev/null 2>&1 || true
-else
-  #  rm -rfv -- .[!.]* ..?* *
-  rm -Rfv /home/$user/.* || true
-  rm -Rfv /home/$user/* || true
+# O -Syuf substitui os binários do openssh: o sshd em execução não aceita
+# novas conexões (ssh-copy-id) até ser reiniciado. A sessão atual sobrevive,
+# pois o runit sinaliza só o daemon. Valida a config antes p/ não ficar trancado fora.
+restart_sshd() {
+	$sshd_restarted && return 0
+	sshd_restarted=true
+	if run_cmd sudo sshd -t; then
+		run_cmd vservice restart sshd
+	else
+		printf '%b sshd_config inválido: sshd NÃO foi reiniciado\n' "$CROSS" >&2
+		return 1
+	fi
+}
+# Mesmo se uma etapa abortar no meio, o sshd é reiniciado na saída
+trap 'rc=$?; restart_sshd || rc=1; exit "$rc"' EXIT
+
+run_cmd sudo mkdir -p /etc/ssh/sshd_config.d /etc/lightdm/lightdm.conf.d
+
+# ── config ─────────────────────────────────────────────────────────
+if want config; then
+	write_conf /etc/xbps.d/00-repository-main.conf \
+		'repository=https://repo-fastly.voidlinux.org/current' \
+		'#repository=https://repo-fastly.voidlinux.org/current/nonfree' \
+		'#repository=https://repo-fastly.voidlinux.org/current/multilib' \
+		'#repository=https://repo-fastly.voidlinux.org/current/multilib/nonfree'
+
+	write_conf "/etc/ssh/sshd_config.d/${port}-custom.conf" "Port $port"
+
+	write_conf /etc/lightdm/lightdm.conf.d/01-greeter-wayland.conf \
+		'#[Seat:*]' \
+		'#greeter-session=lightdm-elephant-greeter'
+
+	write_conf /etc/lightdm/lightdm.conf.d/01-greeter-xorg.conf \
+		'[Seat:*]' \
+		'greeter-session=lightdm-gtk-greeter'
+
+	run_cmd vservice rm dhcpd sddm gdm lxdm greetd
+	run_cmd vservice add lightdm NetworkManager
 fi
-run_cmd cp -Rpa /etc/skel/. .
-run_cmd ls -la
-#
-run_cmd voidbr-vkpurge rm all
-run_cmd voidbr-low-ram-optimizer --install
-run_cmd voidbr-var-log-cleaner
-run_cmd vinstall -Scc
-run_cmd vservice add sshd epoptes-client tailscaled
-#
-{
-    echo "[Seat:*]"
-    echo "autologin-user=$user"
-    echo "autologin-session=xfce"
-} | run_cmd sudo tee /etc/lightdm/lightdm.conf.d/00-autologin.conf
-#
-run_cmd vinstall -fy voidbr-limine-config
-run_cmd sudo voidbr-manager-bootloader \
-  --disk "${disk}" \
-  --bootloader "${bootloader}" \
-  --bios-bootloader "${bootloader}" \
-  --mode bios \
-  --yes || true
-#
-run_cmd vservice restart lightdm
 
-#
+# ── upgrade ────────────────────────────────────────────────────────
+if want upgrade; then
+	run_cmd vinstall -Syuf
+	run_cmd vinstall -fy conectux-xfce-config tailscale
+fi
+
+# ── home ───────────────────────────────────────────────────────────
+if want home; then
+	# Desliga o autologin e derruba a sessão gráfica antes de apagar o home
+	write_conf /etc/lightdm/lightdm.conf.d/00-autologin.conf \
+		'[Seat:*]' \
+		'autologin-user=' \
+		'autologin-session='
+	run_cmd vservice restart lightdm
+
+	if ! cd -- "/home/$user" || [[ $PWD != "/home/$user" ]]; then
+		printf '%b o diretório /home/%s não existe no host\n' "$CROSS" "$user" >&2
+		exit 1
+	fi
+
+	# Remove todo o conteúdo do home, inclusive ocultos (sem risco de casar '.' ou '..')
+	if [[ $quiet == true ]]; then
+		find . -mindepth 1 -delete >/dev/null 2>&1 || true
+	else
+		find . -mindepth 1 -print -delete || true
+	fi
+	run_cmd cp -Rpa /etc/skel/. .
+	run_cmd ls -la
+fi
+
+# ── cleanup ────────────────────────────────────────────────────────
+if want cleanup; then
+	run_cmd voidbr-vkpurge rm all
+	run_cmd voidbr-low-ram-optimizer --install
+	run_cmd voidbr-var-log-cleaner
+	run_cmd vinstall -Scc
+fi
+
+# ── bootloader ─────────────────────────────────────────────────────
+if want bootloader; then
+	run_cmd vinstall -fy voidbr-limine-config
+	run_cmd sudo voidbr-manager-bootloader \
+		--disk "$disk" \
+		--bootloader "$bootloader" \
+		--bios-bootloader "$bootloader" \
+		--mode bios \
+		--yes ||
+		warning "voidbr-manager-bootloader falhou: confira o boot de ${disk} antes de reiniciar"
+fi
+
+# ── final (sempre) ─────────────────────────────────────────────────
+run_cmd vservice add sshd epoptes-client tailscaled ||
+	warning "falha ao habilitar os serviços sshd/epoptes-client/tailscaled"
+write_conf /etc/lightdm/lightdm.conf.d/00-autologin.conf \
+	'[Seat:*]' \
+	"autologin-user=$user" \
+	'autologin-session=xfce' ||
+	warning "falha ao configurar o autologin"
+run_cmd vservice restart lightdm || warning "falha ao reiniciar o lightdm"
+restart_sshd || exit 1
+
+if $warn; then
+	exit 99
+fi
+exit 0
 REMOTE
 }
 
 sh_connect_remote_ssh_copy() {
+	local try
+
 	sh_msg "Executando ssh-copy-id em ${usuario}@${ip}:${porta}..."
 
-	SSHPASS="$senha" sh_run_cmd sshpass -e ssh-copy-id \
-		-o StrictHostKeyChecking=accept-new \
-		-p "$porta" \
-		"$usuario@$ip"
+	# Até 3 tentativas: o sshd acabou de ser reiniciado e pode levar um instante para subir.
+	# Sem multiplexação: com o mux ativo o ssh-copy-id acharia que a chave já existe.
+	for try in 1 2 3; do
+		if SSHPASS="$senha" sh_run_cmd sshpass -e ssh-copy-id \
+			"${SSH_OPTS[@]}" \
+			-o ControlPath=none \
+			-p "$porta" \
+			"${usuario}@${ip}"; then
+			return 0
+		fi
+		if ((try < 3)); then
+			sleep 2
+		fi
+	done
+	return 1
 }
 
 sh_connect_remote_reboot() {
 	sh_msg "Reiniciando ${usuario}@${ip}:${porta}..."
-
-	SSHPASS="$senha" sh_run_cmd sshpass -e ssh \
-		-o StrictHostKeyChecking=accept-new \
-		-p "$porta" \
-		"$usuario@$ip" \
-		sudo reboot
+	# Agenda o reboot em background: o ssh retorna 0 em vez de 255 pela queda da conexão
+	sh_run_cmd ssh_remote "sudo nohup sh -c 'sleep 2; reboot' >/dev/null 2>&1 &"
 }
 
-sh_connect_remote_restart_sshd() {
-	sh_msg "Reiniciando ${usuario}@${ip}:${porta}..."
-
-	SSHPASS="$senha" sh_run_cmd sshpass -e ssh \
-		-o StrictHostKeyChecking=accept-new \
-		-p "$porta" \
-		"$usuario@$ip" \
-		vservice restart sshd
+fmt_dur() {
+	printf '%dm%02ds' "$(($1 / 60))" "$(($1 % 60))"
 }
 
-sh_is_online() {
-	local ip="$1"
-	ping -c1 -W1 "$ip" >/dev/null 2>&1
+# print_result_line <ip> <resultado> <segundos> <nota>
+print_result_line() {
+	local ip=$1 result=$2 secs=$3 note=$4 d
+	d="${gray}($(fmt_dur "$secs"))${rst}"
+	case "$result" in
+	ok)      log_ok "${green}${ip}${rst} atualizado ${d}${note:+ - ${note}}" ;;
+	warn)    log_warn "${ip}${rst} concluído com aviso ${d}: ${note}" ;;
+	fail)    log_err "${red}${ip}${rst} falhou ${d}: ${note}" ;;
+	nossh)   log_err "${red}${ip}${rst} responde ao ping, mas não ao sshd: ${note}" ;;
+	offline) log_err "${cyan}Host offline: ${red}${ip}${rst}" ;;
+	dry)     log_ok "${green}${ip}${rst} acessível ${gray}(sshd na porta ${note})${rst}" ;;
+	esac
 }
 
-# init
-sh_get_remote_ip() {
-	for ((machine = REMOTE_INI; machine <= REMOTE_FIM; machine++)); do
-		sh_proccess
+# Grava o resultado do host n (arquivo lido pelo processo principal)
+write_status() {
+	local f
+	f="${RUN_DIR}/$(printf '%03d' "$1").status"
+	printf '%s|%s|%s|%s\n' "$2" "$3" "$4" "$5" >"${f}.tmp" && mv -f "${f}.tmp" "$f"
+}
+
+# run_host <n> <número do host>
+run_host() {
+	local n=$1 machine=$2 result note="" rc reach start=$SECONDS
+	host_vars "$machine"
+
+	reach=$(host_reach)
+	case "$reach" in
+	offline)
+		result=offline
+		;;
+	nossh)
+		result=nossh
+		note="porta ${porta} fechada"
+		;;
+	*)
+		if $DRY_RUN; then
+			result=dry
+			note=$porta
+		elif ! sh_connect_check; then
+			result=fail
+			note="não foi possível autenticar via SSH"
+		else
+			if sh_connect_remote_upgrade; then rc=0; else rc=$?; fi
+			case "$rc" in
+			0) result=ok ;;
+			99) result=warn; note="uma ou mais etapas falharam (veja o log)" ;;
+			*) result=fail; note="script remoto terminou com código ${rc}" ;;
+			esac
+
+			if [[ $result != fail ]]; then
+				if ! sh_connect_remote_ssh_copy; then
+					result=fail
+					note="falha no ssh-copy-id"
+				elif $REBOOT && [[ $result == ok ]]; then
+					sh_connect_remote_reboot || {
+						result=warn
+						note="falha ao agendar o reboot"
+					}
+				elif $REBOOT; then
+					note="${note:+$note; }reboot cancelado por segurança"
+				fi
+			fi
+		fi
+		$DRY_RUN || ssh_close
+		;;
+	esac
+
+	print_result_line "$rotulo" "$result" "$((SECONDS - start))" "$note"
+	write_status "$n" "$rotulo" "$result" "$((SECONDS - start))" "$note"
+}
+
+# Modo paralelo: mostra os hosts que terminaram desde a última chamada
+declare -A REPORTED=()
+report_new() {
+	local f rip result secs note
+	for f in "$RUN_DIR"/*.status; do
+		[[ -e $f && -z ${REPORTED[$f]:-} ]] || continue
+		REPORTED[$f]=1
+		IFS='|' read -r rip result secs note <"$f"
+		print_result_line "$rip" "$result" "$secs" "$note"
 	done
 }
 
-sh_proccess() {
-	if $PARAM_IP; then
-		ip="${REMOTE_IP}"
-	else
-		ip="${REMOTE_IP}.${machine}"
-	fi
+# ===================================================================
+# Plano, confirmação e resumo
+# ===================================================================
+show_plan() {
+	local s nets users ports desc h
+	local -a nums=() avulsos=()
 
-	if $PARAM_USER; then
-		usuario="${REMOTE_USER}"
-	else
-		usuario="${REMOTE_USER}${machine}"
-	fi
-
-	if $PARAM_PORT; then
-		porta="${REMOTE_PORT}"
-	else
-		porta="${REMOTE_PORT}${machine}"
-	fi
-
-	if sh_is_online "$ip"; then
-		if ! sh_connect_remote_upgrade; then
-			log_err "${cyan}Falha na execução: ${red}$ip${rst}"
-			HOSTS_FAILED+=("$ip")
-			return
+	for h in "${HOST_LIST[@]}"; do
+		if is_hostnum "$h"; then
+			nums+=("$h")
+		else
+			host_vars "$h"
+			avulsos+=("${usuario}@${ip}:${porta}")
 		fi
-
-		if ! sh_connect_remote_ssh_copy; then
-			log_err "${cyan}Falha no ssh-copy-id: ${red}$ip${rst}"
-			HOSTS_FAILED+=("$ip")
-			return
-		fi
-
-		sh_connect_remote_restart_sshd
-
-		if "$REBOOT"; then
-			sh_connect_remote_reboot
-		fi
-
-		HOSTS_SUCCESS+=("$ip")
-		log_ok "Host atualizado com sucesso: ${green}${ip}${rst}"
-		echo
+	done
+	if ((${#nums[@]} == 1)); then
+		nets="${REMOTE_IP}.${nums[0]}"
 	else
-		log_err "${cyan}Host offline: ${red}$ip${rst}"
-		HOSTS_OFFLINE+=("$ip")
+		nets="${REMOTE_IP}.{$(IFS=,; printf '%s' "${nums[*]}")}"
+	fi
+	if $PARAM_USER; then users=$REMOTE_USER; else users="${REMOTE_USER}<n>"; fi
+	if $PARAM_PORT; then ports=$REMOTE_PORT; else ports="${REMOTE_PORT}<n>"; fi
+
+	replicate '─' 72
+	if $DRY_RUN; then
+		msg "${yellow}DRY-RUN:${rst} nada será executado nos hosts, só o teste de acesso"
+	fi
+	if ((${#CONFIG_LOADED[@]})); then
+		msg "Configuração: ${cyan}${CONFIG_LOADED[*]}${rst}"
+	fi
+	msg "Hosts (${#HOST_LIST[@]}):"
+	if ((${#nums[@]})); then
+		printf '      %s• %s%s %s(usuário %s, porta %s)%s\n' "$green" "$cyan" "$nets" "$gray" "$users" "$ports" "$reset"
+	fi
+	for h in "${avulsos[@]}"; do
+		printf '      %s• %s%s %s(avulso)%s\n' "$green" "$cyan" "$h" "$gray" "$reset"
+	done
+	msg "Disco: ${cyan}${REMOTE_DISK}${rst}   Bootloader: ${cyan}${REMOTE_BOOTLOADER}${rst}   Paralelo: ${cyan}${JOBS}${rst}"
+	msg "Etapas:"
+	for s in "${STEP_ORDER[@]}"; do
+		case "$s" in
+		config)     desc="repositório, porta do sshd, greeters do lightdm e serviços" ;;
+		upgrade)    desc="vinstall -Syuf + conectux-xfce-config e tailscale" ;;
+		home)       desc="${red}APAGA${rst} o home do usuário e recopia o /etc/skel" ;;
+		cleanup)    desc="kernels antigos, low-ram-optimizer, logs e cache do xbps" ;;
+		bootloader) desc="reinstala o ${REMOTE_BOOTLOADER} em ${REMOTE_DISK}" ;;
+		esac
+		if step_skipped "$s"; then
+			printf '      %s– %-11s(pulada)%s\n' "$gray" "$s" "$reset"
+		else
+			printf '      %s• %-11s%s%s\n' "$green" "$s" "$reset" "$desc"
+		fi
+	done
+	printf '      %s• %-11s%s%s\n' "$green" "final" "$reset" "serviços, autologin, restart do lightdm e do sshd"
+	printf '      %s• %-11s%s%s\n' "$green" "chave" "$reset" "ssh-copy-id da sua chave pública"
+	if $REBOOT; then
+		printf '      %s• %-11s%s%s\n' "$green" "reboot" "$reset" "reinicia o host (só se não houver avisos)"
+	fi
+	if $RESET_KEYS; then
+		msg "As chaves SSH conhecidas desses hosts serão esquecidas (--reset-keys)"
+	fi
+	if ! step_skipped home; then
+		log_warn "${red}ATENÇÃO:${rst} o home de cada host será ${red}APAGADO${rst}."
+	fi
+	if ! step_skipped bootloader; then
+		log_warn "O bootloader de ${REMOTE_DISK} será reinstalado em cada host."
+	fi
+	replicate '─' 72
+}
+
+declare -i CNT_OK=0 CNT_WARN=0 CNT_FAIL=0 CNT_NOSSH=0 CNT_OFFLINE=0 CNT_DRY=0
+
+print_summary() {
+	local i f rip result secs note line cat
+	local -A lines=()
+	local -a order=(ok dry warn nossh fail offline)
+	local -A title=(
+		[ok]="Hosts atualizados com sucesso:"
+		[dry]="Hosts acessíveis:"
+		[warn]="Hosts concluídos com aviso:"
+		[nossh]="Hosts sem resposta do sshd:"
+		[fail]="Hosts com falha:"
+		[offline]="Hosts offline:"
+	)
+
+	for ((i = 1; i <= ${#HOST_LIST[@]}; i++)); do
+		f="${RUN_DIR}/$(printf '%03d' "$i").status"
+		if [[ -r $f ]]; then
+			IFS='|' read -r rip result secs note <"$f"
+		else
+			rip=${HOST_IPS[i]} result=fail secs=0 note="processo abortado (veja o log)"
+		fi
+		case "$result" in
+		ok) CNT_OK+=1 ;;
+		dry) CNT_DRY+=1 ;;
+		warn) CNT_WARN+=1 ;;
+		nossh) CNT_NOSSH+=1 ;;
+		fail) CNT_FAIL+=1 ;;
+		*) CNT_OFFLINE+=1 ;;
+		esac
+		line="${rip}"
+		[[ $result == offline || $result == dry || $result == nossh ]] || line+=" ${gray}($(fmt_dur "$secs"))${rst}"
+		[[ -n $note && $result != dry ]] && line+=" - ${note}"
+		lines[$result]+="${line}"$'\n'
+	done
+
+	echo
+	replicate '─' 72
+	for cat in "${order[@]}"; do
+		[[ -n ${lines[$cat]:-} ]] || continue
+		case "$cat" in
+		ok | dry) log_ok "${title[$cat]}" ;;
+		warn) log_warn "${title[$cat]}${rst}" ;;
+		*) log_err "${title[$cat]}" ;;
+		esac
+		while IFS= read -r line; do
+			[[ -n $line ]] || continue
+			case "$cat" in
+			ok | dry) log_ok_tab "  ${green}${line}${rst}" ;;
+			warn) log_warn_tab "  ${line}${rst}" ;;
+			*) log_err_tab "  ${red}${line}${rst}" ;;
+			esac
+		done <<<"${lines[$cat]}"
+	done
+	replicate '─' 72
+	msg "Total: ${#HOST_LIST[@]} host(s) em $(fmt_dur "$((SECONDS - RUN_START))")"
+	if ! $DRY_RUN; then
+		msg "Logs: ${cyan}${RUN_DIR}${rst}"
 	fi
 }
 
-if ! $PARAM_IP; then
-	sh_get_remote_ip
+# Mantém só as últimas $LOGS_KEEP execuções
+prune_logs() {
+	local -a runs=()
+	local d
+	for d in "${LOGS_DIR}/"*/; do
+		[[ -d $d ]] && runs+=("${d%/}")
+	done
+	if ((${#runs[@]} > LOGS_KEEP)); then
+		rm -rf -- "${runs[@]:0:${#runs[@]}-LOGS_KEEP}"
+	fi
+}
+
+# O ssh-copy-id precisa de uma chave pública local (arquivo ou ssh-agent).
+# Sem ela, todos os hosts seriam processados e só falhariam no fim.
+has_ssh_key() {
+	compgen -G "${HOME}/.ssh/id_*.pub" >/dev/null && return 0
+	ssh-add -L >/dev/null 2>&1
+}
+
+# ===================================================================
+# Principal
+# ===================================================================
+show_plan
+
+if ! has_ssh_key; then
+	if $DRY_RUN; then
+		log_warn "Nenhuma chave SSH encontrada em ~/.ssh/ (o ssh-copy-id vai falhar). Crie com: ${green}ssh-keygen -t ed25519${rst}"
+	else
+		die "Nenhuma chave SSH encontrada em ~/.ssh/ para o ssh-copy-id. Crie com: ssh-keygen -t ed25519"
+	fi
+fi
+
+if ! $DRY_RUN && ! $ASSUME_YES; then
+	[[ -t 0 ]] || die "Sem terminal para confirmar. Use --yes para rodar sem perguntar."
+	if ! readconf "Confirma a execução em ${#HOST_LIST[@]} host(s)?"; then
+		log_warn "Cancelado pelo usuário."
+		exit 1
+	fi
+fi
+
+if $DRY_RUN; then
+	RUN_DIR=$(mktemp -d)
+	trap 'rm -rf -- "$RUN_DIR"' EXIT
 else
-	sh_proccess
-fi
-
-if ((${#HOSTS_OFFLINE[@]})); then
-	log_err "Hosts offline:"
-	for host in "${HOSTS_OFFLINE[@]}"; do
-		log_err_tab "  ${red}$host${rst}"
+	ensure_base_dir
+	mkdir -p "$LOGS_DIR"
+	# mkdir é atômico: se outra execução pegou o mesmo nome no mesmo segundo, tenta -2, -3...
+	run_base="${LOGS_DIR}/$(date +%Y%m%d-%H%M%S)"
+	RUN_DIR=$run_base
+	run_try=1
+	until mkdir "$RUN_DIR" 2>/dev/null; do
+		run_try=$((run_try + 1))
+		((run_try <= 50)) || die "Não foi possível criar o diretório de log em ${LOGS_DIR}"
+		RUN_DIR="${run_base}-${run_try}"
 	done
-fi
+	prune_logs
 
-if ((${#HOSTS_FAILED[@]})); then
-	log_err "Hosts com falha de execução:"
-	for host in "${HOSTS_FAILED[@]}"; do
-		log_err_tab "  ${red}$host${rst}"
-	done
+	if $RESET_KEYS && [[ -f $KNOWN_HOSTS ]]; then
+		for machine in "${HOST_LIST[@]}"; do
+			host_vars "$machine"
+			ssh-keygen -f "$KNOWN_HOSTS" -R "$ip" >/dev/null 2>&1 || true
+			ssh-keygen -f "$KNOWN_HOSTS" -R "[${ip}]:${porta}" >/dev/null 2>&1 || true
+		done
+		msg "Chaves SSH antigas removidas de ${cyan}${KNOWN_HOSTS}${rst}"
+	fi
 fi
+echo
 
-if ((${#HOSTS_SUCCESS[@]})); then
-	log_ok "Hosts com sucesso de execução:"
-	for host in "${HOSTS_SUCCESS[@]}"; do
-		log_ok_tab "  ${green}$host${rst}"
-	done
+declare -i RUN_START=$SECONDS
+n=0
+running=0
+for machine in "${HOST_LIST[@]}"; do
+	n=$((n + 1))
+	host_vars "$machine"
+	HOST_IPS[n]=$rotulo
+	log="${RUN_DIR}/${rotulo//:/_}.log"
+
+	if ((JOBS > 1)); then
+		if ((running >= JOBS)); then
+			wait -n || true
+			running=$((running - 1))
+			report_new
+		fi
+		run_host "$n" "$machine" >"$log" 2>&1 </dev/null &
+		running=$((running + 1))
+		if $DRY_RUN; then
+			msg "Testando ${cyan}${rotulo}${rst}..."
+		else
+			msg "Iniciado ${cyan}${rotulo}${rst} ${gray}→ ${log}${rst}"
+		fi
+	else
+		run_host "$n" "$machine" 2>&1 | tee "$log"
+		$DRY_RUN || echo
+	fi
+done
+
+while ((running > 0)); do
+	wait -n || true
+	running=$((running - 1))
+	report_new
+done
+
+print_summary >"${RUN_DIR}/resumo.log"
+cat "${RUN_DIR}/resumo.log"
+
+if ((CNT_FAIL + CNT_NOSSH)); then
+	exit 1
+elif ((CNT_WARN)); then
+	exit 2
 fi
+exit 0
