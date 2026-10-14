@@ -364,6 +364,7 @@ trap sh_trap_int INT
 declare REMOTE_INI=50
 declare REMOTE_FIM=60
 declare REMOTE_IP='100.119.111'
+declare PARAM_IP=false
 declare REMOTE_PORT='22'
 declare PARAM_PORT=false
 declare REMOTE_USER='aluno'
@@ -372,6 +373,8 @@ declare senha='senha'
 declare PARAM_SENHA=false
 declare REMOTE_DISK="/dev/sda"
 declare PARAM_DISK=false
+declare REMOTE_BOOTLOADER="limine"
+declare PARAM_BOOTLOADER=false
 #
 declare QUIET=false
 declare PROCESS_ALL=false
@@ -391,6 +394,7 @@ Opções:
   -a, --all                Processa todos os hosts (${yellow}${REMOTE_IP}.${REMOTE_INI}-${REMOTE_IP}.${REMOTE_FIM}${rst})
   -i, --remote-ini ${red}<NUM>${rst}   Primeiro host do intervalo
   -f, --remote-fim ${red}<NUM>${rst}   Último host do intervalo
+  --ip             ${red}<ip>${rst}    Ip do remoto
   -p, --port       ${red}<NUM>${rst}   Porta host remoto
   -q, --quiet              Oculta a saída dos comandos
   -r, --reboot             Reinicia o host remoto após finalizar
@@ -398,6 +402,7 @@ Opções:
   -u, --user               Usuario remoto
   -s, --senha              Senha usuario remoto
   -d, --disk               Disco remoteo (ex: /dev/sda)
+  -b, --bootloader         Bootloader do disco remoto (limine|grub - padrão: limine)
   -h, --help               Mostra esta ajuda
 
 Exemplos:
@@ -407,6 +412,7 @@ Exemplos:
   $APP --remote-ini 50 --remote-fim 55
   $APP -i 50 -f 55 --quiet
   $APP -i 50 -f 50 --quiet --reboot
+  $APP --ip 127.0.0.1 --port 60024 --user anon --senha voidlinux --disk /dev/vda --quiet
 EOF
 }
 
@@ -417,6 +423,28 @@ fi
 
 while (($#)); do
 	case "$1" in
+	-b|--bootloader)
+		if (($# < 2)); then
+			echo "Opção $1 requer um valor." >&2
+			echo >&2
+			usage >&2
+			exit 1
+		fi
+		REMOTE_BOOTLOADER="$2"
+		PARAM_BOOTLOADER=true
+		shift 2
+		;;
+	--ip)
+		if (($# < 2)); then
+			echo "Opção $1 requer um valor." >&2
+			echo >&2
+			usage >&2
+			exit 1
+		fi
+		REMOTE_IP="$2"
+		PARAM_IP=true
+		shift 2
+		;;
 	-d | --disk)
 		if (($# < 2)); then
 			echo "Opção $1 requer um valor." >&2
@@ -519,19 +547,22 @@ while (($#)); do
 	esac
 done
 
-if "$PROCESS_ALL"; then
-	REMOTE_INI=50
-	REMOTE_FIM=60
-fi
+if ! $PARAM_IP; then
+	if "$PROCESS_ALL"; then
+		REMOTE_INI=50
+		REMOTE_FIM=60
+	fi
 
-if ! [[ $REMOTE_INI =~ ^[0-9]+$ && $REMOTE_FIM =~ ^[0-9]+$ ]]; then
-	echo "REMOTE_INI e REMOTE_FIM devem ser números inteiros." >&2
-	exit 1
-fi
+	if ! [[ $REMOTE_INI =~ ^[0-9]+$ && $REMOTE_FIM =~ ^[0-9]+$ ]]; then
+		echo "REMOTE_INI e REMOTE_FIM devem ser números inteiros." >&2
+		exit 1
+	fi
 
-if ((REMOTE_INI > REMOTE_FIM)); then
-	echo "REMOTE_INI não pode ser maior que REMOTE_FIM." >&2
-	exit 1
+	if ((REMOTE_INI > REMOTE_FIM)); then
+		echo "REMOTE_INI não pode ser maior que REMOTE_FIM." >&2
+		exit 1
+	fi
+
 fi
 
 sh_msg() {
@@ -577,7 +608,7 @@ sh_connect_remote_upgrade() {
 		-o StrictHostKeyChecking=accept-new \
 		-p "$porta" \
 		"${usuario}@${ip}" \
-		bash -s -- "$usuario" "$ip" "$porta" "${REMOTE_DISK}" "$QUIET" "$REBOOT" <<'REMOTE'
+		bash -s -- "$usuario" "$ip" "$porta" "${REMOTE_DISK}" "${REMOTE_BOOTLOADER}" "$QUIET" "$REBOOT" <<'REMOTE'
 set -e
 export TERM=${TERM:-xterm-256color}
 
@@ -585,8 +616,9 @@ user=$1
 nip=$2
 port=$3
 disk=$4
-quiet=$5
-reboot=$6
+bootloader=$5
+quiet=$6
+reboot=$7
 
 black='\033[1;30m'
 red='\033[1;38;5;196m'
@@ -686,6 +718,7 @@ echo "Port $port" | run_cmd sudo tee /etc/ssh/sshd_config.d/${port}-custom.conf
 run_cmd vservice restart lightdm
 run_cmd vinstall -Syuf
 run_cmd vinstall -fy conectux-xfce-config
+run_cmd vinstall -fy tailscale
 
 cd -- "/home/$user" || exit 1
 [[ "$PWD" == "/home/$user" ]] || exit 1
@@ -719,8 +752,8 @@ run_cmd vservice add tailscaled
 run_cmd vinstall -fy voidbr-limine-config
 run_cmd sudo voidbr-manager-bootloader \
   --disk "${disk}" \
-  --bootloader limine \
-  --bios-bootloader limine \
+  --bootloader "${bootloader}" \
+  --bios-bootloader "${bootloader}" \
   --mode bios \
   --yes || true
 #
@@ -753,30 +786,43 @@ sh_is_online() {
 	ping -c1 -W1 "$ip" >/dev/null 2>&1
 }
 
-for ((machine = REMOTE_INI; machine <= REMOTE_FIM; machine++)); do
-	ip="${REMOTE_IP}.${machine}"
-  if $PARAM_USER; then
-  	usuario="${REMOTE_USER}"
-  else
-  	usuario="${REMOTE_USER}${machine}"
-  fi
-  if $PARAM_PORT; then
-  	porta="${REMOTE_PORT}"
-  else
-  	porta="${REMOTE_PORT}${machine}"
-  fi
+# init
+sh_get_remote_ip() {
+	for ((machine = REMOTE_INI; machine <= REMOTE_FIM; machine++)); do
+		sh_proccess
+	done
+}
+
+sh_proccess() {
+	if $PARAM_IP; then
+		ip="${REMOTE_IP}"
+	else
+		ip="${REMOTE_IP}.${machine}"
+	fi
+
+	if $PARAM_USER; then
+		usuario="${REMOTE_USER}"
+	else
+		usuario="${REMOTE_USER}${machine}"
+	fi
+
+	if $PARAM_PORT; then
+		porta="${REMOTE_PORT}"
+	else
+		porta="${REMOTE_PORT}${machine}"
+	fi
 
 	if sh_is_online "$ip"; then
 		if ! sh_connect_remote_upgrade; then
 			log_err "${cyan}Falha na execução: ${red}$ip${rst}"
 			HOSTS_FAILED+=("$ip")
-			continue
+			return
 		fi
 
 		if ! sh_connect_remote_ssh_copy; then
 			log_err "${cyan}Falha no ssh-copy-id: ${red}$ip${rst}"
 			HOSTS_FAILED+=("$ip")
-			continue
+			return
 		fi
 
 		if "$REBOOT"; then
@@ -790,7 +836,13 @@ for ((machine = REMOTE_INI; machine <= REMOTE_FIM; machine++)); do
 		log_err "${cyan}Host offline: ${red}$ip${rst}"
 		HOSTS_OFFLINE+=("$ip")
 	fi
-done
+}
+
+if ! $PARAM_IP; then
+	sh_get_remote_ip
+else
+	sh_proccess
+fi
 
 if ((${#HOSTS_OFFLINE[@]})); then
 	log_err "Hosts offline:"
