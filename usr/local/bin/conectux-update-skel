@@ -4,7 +4,7 @@
 #
 #  conectux-update-skel - Atualiza e configura os hosts remotos.
 #  Created: seg 21 set 2026 23:40:13 -03
-#  Updated: ter 13 out 2026 22:40:51 -04
+#  Updated: qua 14 out 2026 15:31:44 -04
 #
 #  Copyright (c) 2019-2026, Vilmar Catafesta <vcatafesta@gmail.com>
 #  Copyright (c) 2019-2026, ChiliLinux Development Team <https://chililinux.com> <https://github.com/chililinux>
@@ -45,7 +45,7 @@ shopt -s extglob
 
 #system
 declare APP="${0##*/}"
-declare _VERSION_="0.10.13-20261013"
+declare _VERSION_="0.10.14-20261014"
 declare APPDESC="$APP - Atualiza e configura os hosts remotos "
 declare distro="$(uname -n)"
 declare -A PACKAGEDEP=(
@@ -376,7 +376,7 @@ declare PARAM_DISK=false
 declare REMOTE_BOOTLOADER="limine"
 declare PARAM_BOOTLOADER=false
 #
-declare QUIET=false
+declare QUIET=true
 declare PROCESS_ALL=false
 declare REBOOT=false
 #
@@ -396,7 +396,7 @@ Opções:
   -f, --remote-fim ${red}<NUM>${rst}   Último host do intervalo
   --ip             ${red}<ip>${rst}    Ip do remoto
   -p, --port       ${red}<NUM>${rst}   Porta host remoto
-  -q, --quiet              Oculta a saída dos comandos
+  -v, --verbose            Mostra saída dos comandos
   -r, --reboot             Reinicia o host remoto após finalizar
   -V, --version            Mostra a versão e sai
   -u, --user               Usuario remoto
@@ -410,9 +410,9 @@ Exemplos:
   $APP -a -q
   $APP -i 50 -f 55
   $APP --remote-ini 50 --remote-fim 55
-  $APP -i 50 -f 55 --quiet
-  $APP -i 50 -f 50 --quiet --reboot
-  $APP --ip 127.0.0.1 --port 60024 --user anon --senha voidlinux --disk /dev/vda --quiet
+  $APP -i 50 -f 55 --verbose
+  $APP -i 50 -f 50 --verbose --reboot
+  $APP --ip 127.0.0.1 --port 60024 --user anon --senha voidlinux --disk /dev/vda
 EOF
 }
 
@@ -528,6 +528,10 @@ while (($#)); do
 		shift 2
 		;;
 
+	-v | --verbose)
+		QUIET=false
+		shift
+		;;
 	-q | --quiet)
 		QUIET=true
 		shift
@@ -599,6 +603,21 @@ sh_run_cmd() {
 			return "$status"
 		fi
 	fi
+}
+
+sh_remote_run_command() {
+  sh_msg "Executando os comandos em ${usuario}@${ip}:${porta}..."
+
+  SSHPASS="$senha" sshpass -e ssh \
+    -o StrictHostKeyChecking=accept-new \
+    -p "$porta" \
+    "${usuario}@${ip}" \
+    bash -s -- "$usuario" "$ip" "$porta" "${REMOTE_DISK}" "${REMOTE_BOOTLOADER}" "$QUIET" "$REBOOT" <<'REMOTE'
+set -e
+export TERM=${TERM:-xterm-256color}
+
+sudo vservice restart sshd
+REMOTE
 }
 
 sh_connect_remote_upgrade() {
@@ -710,12 +729,23 @@ run_cmd() {
 run_cmd sudo mkdir -p /etc/ssh/sshd_config.d/
 echo "Port $port" | run_cmd sudo tee /etc/ssh/sshd_config.d/${port}-custom.conf
 {
+  echo '#[Seat:*]'
+  echo '#greeter-session=lightdm-elephant-greeter'
+} | run_cmd sudo tee /etc/lightdm/lightdm.conf.d/01-greeter-wayland.conf
+#
+{
+  echo '[Seat:*]'
+  echo 'greeter-session=lightdm-gtk-greeter'
+} | run_cmd sudo tee /etc/lightdm/lightdm.conf.d/01-greeter-xorg.conf
+#
+{
   echo "[Seat:*]"
   echo "autologin-user="
   echo "autologin-session="
 } | run_cmd sudo tee /etc/lightdm/lightdm.conf.d/00-autologin.conf
 #
-run_cmd vservice rm sddm gdm lxdm greetd
+run_cmd vservice rm dhcpd sddm gdm lxdm greetd
+run_cmd vservice add lightdm NetworkManager
 run_cmd vservice restart lightdm
 run_cmd vinstall -Syuf
 run_cmd vinstall -fy conectux-xfce-config
@@ -740,9 +770,7 @@ run_cmd voidbr-vkpurge rm all
 run_cmd voidbr-low-ram-optimizer --install
 run_cmd voidbr-var-log-cleaner
 run_cmd vinstall -Scc
-run_cmd vservice add sshd
-run_cmd vservice add epoptes-client
-run_cmd vservice add tailscaled
+run_cmd vservice add sshd epoptes-client tailscaled
 #
 {
     echo "[Seat:*]"
@@ -759,6 +787,7 @@ run_cmd sudo voidbr-manager-bootloader \
   --yes || true
 #
 run_cmd vservice restart lightdm
+
 #
 REMOTE
 }
@@ -825,6 +854,8 @@ sh_proccess() {
 			HOSTS_FAILED+=("$ip")
 			return
 		fi
+
+		sh_remote_run_command
 
 		if "$REBOOT"; then
 			sh_connect_remote_reboot
