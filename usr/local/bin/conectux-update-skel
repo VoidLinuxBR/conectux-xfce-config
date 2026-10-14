@@ -715,6 +715,7 @@ echo "Port $port" | run_cmd sudo tee /etc/ssh/sshd_config.d/${port}-custom.conf
   echo "autologin-session="
 } | run_cmd sudo tee /etc/lightdm/lightdm.conf.d/00-autologin.conf
 #
+run_cmd vservice rm sddm gdm lxdm greetd
 run_cmd vservice restart lightdm
 run_cmd vinstall -Syuf
 run_cmd vinstall -fy conectux-xfce-config
