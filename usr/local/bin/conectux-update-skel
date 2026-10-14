@@ -365,8 +365,13 @@ declare REMOTE_INI=50
 declare REMOTE_FIM=60
 declare REMOTE_IP='100.119.111'
 declare REMOTE_PORT='22'
+declare PARAM_PORT=false
 declare REMOTE_USER='aluno'
+declare PARAM_USER=false
 declare senha='senha'
+declare PARAM_SENHA=false
+declare REMOTE_DISK="/dev/sda"
+declare PARAM_DISK=false
 #
 declare QUIET=false
 declare PROCESS_ALL=false
@@ -391,6 +396,8 @@ Opções:
   -r, --reboot             Reinicia o host remoto após finalizar
   -V, --version            Mostra a versão e sai
   -u, --user               Usuario remoto
+  -s, --senha              Senha usuario remoto
+  -d, --disk               Disco remoteo (ex: /dev/sda)
   -h, --help               Mostra esta ajuda
 
 Exemplos:
@@ -410,6 +417,17 @@ fi
 
 while (($#)); do
 	case "$1" in
+	-d | --disk)
+		if (($# < 2)); then
+			echo "Opção $1 requer um valor." >&2
+			echo >&2
+			usage >&2
+			exit 1
+		fi
+		REMOTE_DISK="$2"
+		PARAM_DISK=true
+		shift 2
+		;;
 	-u | --user)
 		if (($# < 2)); then
 			echo "Opção $1 requer um valor." >&2
@@ -418,6 +436,18 @@ while (($#)); do
 			exit 1
 		fi
 		REMOTE_USER="$2"
+		PARAM_USER=true
+		shift 2
+		;;
+	-s | --senha)
+		if (($# < 2)); then
+			echo "Opção $1 requer um valor." >&2
+			echo >&2
+			usage >&2
+			exit 1
+		fi
+		senha="$2"
+		PARAM_SENHA=true
 		shift 2
 		;;
 
@@ -429,6 +459,7 @@ while (($#)); do
 			exit 1
 		fi
 		REMOTE_PORT="$2"
+		PARAM_PORT=true
 		shift 2
 		;;
 
@@ -546,15 +577,16 @@ sh_connect_remote_upgrade() {
 		-o StrictHostKeyChecking=accept-new \
 		-p "$porta" \
 		"${usuario}@${ip}" \
-		bash -s -- "$usuario" "$ip" "$porta" "$QUIET" "$REBOOT" <<'REMOTE'
+		bash -s -- "$usuario" "$ip" "$porta" "${REMOTE_DISK}" "$QUIET" "$REBOOT" <<'REMOTE'
 set -e
 export TERM=${TERM:-xterm-256color}
 
 user=$1
 nip=$2
 port=$3
-quiet=$4
-reboot=$5
+disk=$4
+quiet=$5
+reboot=$6
 
 black='\033[1;30m'
 red='\033[1;38;5;196m'
@@ -645,7 +677,12 @@ run_cmd() {
 
 run_cmd sudo mkdir -p /etc/ssh/sshd_config.d/
 echo "Port $port" | run_cmd sudo tee /etc/ssh/sshd_config.d/${port}-custom.conf
-
+{
+  echo "[Seat:*]"
+  echo "autologin-user="
+  echo "autologin-session="
+} | run_cmd sudo tee /etc/lightdm/lightdm.conf.d/00-autologin.conf
+#
 run_cmd vservice restart lightdm
 run_cmd vinstall -Syuf
 run_cmd vinstall -fy conectux-xfce-config
@@ -655,9 +692,12 @@ cd -- "/home/$user" || exit 1
 
 # Remove todo o conteúdo, inclusive arquivos ocultos, exceto '.' e '..'.
 if [[ "$quiet" == true ]]; then
-  rm -rf -- .[!.]* ..?* * >/dev/null 2>&1
+  rm -Rf /home/$user/.* >/dev/null 2>&1 || true
+  rm -Rf /home/$user/* >/dev/null 2>&1 || true
 else
-  rm -rfv -- .[!.]* ..?* *
+  #  rm -rfv -- .[!.]* ..?* *
+  rm -Rfv /home/$user/.* || true
+  rm -Rfv /home/$user/* || true
 fi
 run_cmd cp -Rpa /etc/skel/. .
 run_cmd ls -la
@@ -677,7 +717,12 @@ run_cmd vservice add tailscaled
 } | run_cmd sudo tee /etc/lightdm/lightdm.conf.d/00-autologin.conf
 #
 run_cmd vinstall -fy voidbr-limine-config
-run_cmd sudo voidbr-manager-bootloader --disk /dev/sda --bootloader limine --mode bios --yes
+run_cmd sudo voidbr-manager-bootloader \
+  --disk "${disk}" \
+  --bootloader limine \
+  --bios-bootloader limine \
+  --mode bios \
+  --yes || true
 #
 run_cmd vservice restart lightdm
 #
@@ -710,8 +755,16 @@ sh_is_online() {
 
 for ((machine = REMOTE_INI; machine <= REMOTE_FIM; machine++)); do
 	ip="${REMOTE_IP}.${machine}"
-	usuario="${REMOTE_USER}${machine}"
-	porta="${REMOTE_PORT}${machine}"
+  if $PARAM_USER; then
+  	usuario="${REMOTE_USER}"
+  else
+  	usuario="${REMOTE_USER}${machine}"
+  fi
+  if $PARAM_PORT; then
+  	porta="${REMOTE_PORT}"
+  else
+  	porta="${REMOTE_PORT}${machine}"
+  fi
 
 	if sh_is_online "$ip"; then
 		if ! sh_connect_remote_upgrade; then
